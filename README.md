@@ -219,7 +219,7 @@ suggested_followup_question
 - 開啟：系統自動接受 Router 判斷並執行。
 - 關閉：前端會顯示五種 route 按鈕，讓使用者改選後按「確認執行」。
 
-目前第 9 階段只完成 Context Router 與 Human-in-the-loop 流程。`db_query`、`db_write`、`rag`、`image_skill` 的完整能力會在後續階段實作；目前會先回覆「此能力將在下一階段啟用」。
+目前 `db_query` 已串接安全 SQL Agent。`db_write`、`rag`、`image_skill` 的完整能力會在後續階段實作；目前會先回覆「此能力將在下一階段啟用」。
 
 如果對應功能 toggle 沒開，例如 `Enable DB Query` 關閉但 Router 判斷為 `db_query`，assistant 會回覆：
 
@@ -235,7 +235,44 @@ DB Query 尚未啟用，請先在右側開啟。
 4. 啟動 Flask 後端
 5. 啟動 React 前端
 
-## 11. 在 Docker 裡查看目前資料
+## 11. 安全 SQL Agent
+
+右側 Control Panel 同時開啟 `Enable Context Router` 與 `Enable DB Query` 時，如果 Router 判斷本次任務是 `db_query`，後端會執行 SQL Agent 流程：
+
+```text
+schema introspection
+自然語言轉 SQL
+SQL 安全驗證
+執行 MySQL SELECT
+LLM 整理繁體中文回答
+```
+
+安全限制：
+
+- 只允許 `SELECT`。
+- 禁止 `INSERT`、`UPDATE`、`DELETE`、`DROP`、`ALTER`、`TRUNCATE`、`CREATE` 等操作。
+- 不允許多語句 SQL 或分號。
+- 查詢必須有 `LIMIT`，後端最多允許 50 筆。
+- 執行 SQL 前會用程式驗證，不只依賴 prompt。
+- 發生錯誤時只回傳友善訊息，不會把完整 stack trace 顯示到前端。
+
+前端 assistant 泡泡會顯示：
+
+- 本次使用 route：DB Query
+- 可收合的產生 SQL
+- 可收合的查詢結果表格
+- LLM 整理後的回答
+
+可測試問題：
+
+```text
+資訊部有哪些員工？列出姓名、職稱、email。
+各部門費用總額是多少？依金額高到低排序。
+找出還沒核准且金額超過 3000 的費用。
+哪個廠商的發票總金額最高？
+```
+
+## 12. 在 Docker 裡查看目前資料
 
 如果你是用本專案的 `docker-compose.yml` 啟動 MySQL，可以進入 MySQL CLI：
 

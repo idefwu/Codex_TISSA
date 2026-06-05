@@ -584,6 +584,93 @@ input:focus-visible {
   color: var(--accent);
 }
 
+.sql-agent-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  white-space: normal;
+}
+
+.sql-agent-route {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sql-agent-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border-radius: 8px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--panel));
+  font-size: 13px;
+}
+
+.sql-agent-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  overflow: hidden;
+}
+
+.sql-agent-details summary {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.sql-agent-details pre {
+  margin: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.sql-result-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+}
+
+.sql-result-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sql-result-table th,
+.sql-result-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.sql-result-table th {
+  color: var(--muted);
+  background: var(--surface);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.sql-result-table td {
+  color: var(--text);
+}
+
 .message-bubble--thinking {
   min-width: 82px;
 }

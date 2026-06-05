@@ -19,6 +19,7 @@ from app.llm import (
 )
 from app.models import ChatMessage, ChatRoom, Department, Employee, ExpenseReport, Invoice, Vendor
 from app.router import ROUTE_NAMES, RouterDecision, classify_context_route, router_decision_to_dict
+from app.sql_agent import SQLAgentError, run_sql_agent
 
 
 def decimal_to_float(value):
@@ -149,6 +150,32 @@ def execute_route_for_user_message(
     if disabled_message:
         content = disabled_message
         metadata["source"] = "capability-disabled"
+    elif route == "db_query":
+        try:
+            sql_agent_result = run_sql_agent(
+                question=user_message.content,
+                model=controls["model"],
+                temperature=controls["temperature"],
+            )
+            content = sql_agent_result["answer"]
+            metadata["source"] = "sql-agent"
+            metadata["sql_agent"] = {
+                "sql": sql_agent_result["sql"],
+                "raw_sql": sql_agent_result["raw_sql"],
+                "reason": sql_agent_result["reason"],
+                "columns": sql_agent_result["columns"],
+                "rows": sql_agent_result["rows"],
+                "row_count": sql_agent_result["row_count"],
+                "max_rows": sql_agent_result["max_rows"],
+                "allowed_tables": sql_agent_result["allowed_tables"],
+            }
+        except SQLAgentError as exc:
+            content = f"DB Query 無法完成：{exc}"
+            metadata["source"] = "sql-agent-error"
+            metadata["sql_agent"] = {
+                "error": str(exc),
+                "stage": exc.stage,
+            }
     elif route != "general_chat":
         content = "此能力將在下一階段啟用。"
     else:

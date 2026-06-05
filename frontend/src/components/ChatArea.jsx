@@ -10,6 +10,20 @@ const routeOptions = [
   { value: 'image_skill', label: 'Image' },
 ]
 
+const routeLabelMap = Object.fromEntries(routeOptions.map((route) => [route.value, route.label]))
+
+function formatCellValue(value) {
+  if (value === null || value === undefined) {
+    return '-'
+  }
+
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+
+  return String(value)
+}
+
 function TypingIndicator() {
   return (
     <span className="typing-indicator" aria-label="系統思考中">
@@ -20,8 +34,78 @@ function TypingIndicator() {
   )
 }
 
+function SqlAgentDetails({ metadata }) {
+  const route = metadata?.route?.route
+  const sqlAgent = metadata?.sql_agent
+
+  if (!route && !sqlAgent) {
+    return null
+  }
+
+  const columns = sqlAgent?.columns ?? []
+  const rows = sqlAgent?.rows ?? []
+  const routeLabel = routeLabelMap[route] ?? route ?? 'General'
+
+  return (
+    <div className="sql-agent-panel">
+      {route ? (
+        <div className="sql-agent-route">
+          <Database size={14} />
+          <span>本次使用 route：{routeLabel}</span>
+        </div>
+      ) : null}
+
+      {sqlAgent?.error ? (
+        <div className="sql-agent-error">{sqlAgent.error}</div>
+      ) : null}
+
+      {sqlAgent?.sql ? (
+        <details className="sql-agent-details">
+          <summary>產生的 SQL</summary>
+          <pre>
+            <code>{sqlAgent.sql}</code>
+          </pre>
+        </details>
+      ) : null}
+
+      {columns.length > 0 ? (
+        <details className="sql-agent-details">
+          <summary>查詢結果表格（{sqlAgent?.row_count ?? rows.length} 筆）</summary>
+          <div className="sql-result-table-wrap">
+            <table className="sql-result-table">
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length > 0 ? (
+                  rows.map((row, rowIndex) => (
+                    <tr key={`sql-row-${rowIndex}`}>
+                      {columns.map((column) => (
+                        <td key={`${rowIndex}-${column}`}>{formatCellValue(row[column])}</td>
+                      ))}
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={columns.length}>沒有符合條件的資料</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
 function MessageBubble({ message }) {
   const isUser = message.role === 'user'
+  const metadata = message.metadata_json ?? {}
 
   return (
     <article className={`message-row ${isUser ? 'message-row--user' : 'message-row--assistant'}`}>
@@ -34,17 +118,20 @@ function MessageBubble({ message }) {
         ) : isUser ? (
           message.content
         ) : (
-          <ReactMarkdown
-            components={{
-              a: ({ children, ...props }) => (
-                <a {...props} target="_blank" rel="noreferrer">
-                  {children}
-                </a>
-              ),
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          <>
+            <SqlAgentDetails metadata={metadata} />
+            <ReactMarkdown
+              components={{
+                a: ({ children, ...props }) => (
+                  <a {...props} target="_blank" rel="noreferrer">
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </>
         )}
       </div>
     </article>
