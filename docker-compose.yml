@@ -1,0 +1,23 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: codex_tissa_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: codex_demo
+      MYSQL_USER: codex_user
+      MYSQL_PASSWORD: codex_pass
+      MYSQL_ROOT_PASSWORD: codex_root_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - codex_tissa_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pcodex_root_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  codex_tissa_mysql_data:

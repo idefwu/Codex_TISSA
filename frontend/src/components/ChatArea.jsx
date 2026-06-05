@@ -1,4 +1,4 @@
-import { Bot, Image, Send, User } from 'lucide-react'
+import { Bot, Database, Image, RefreshCw, Send, User } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 function TypingIndicator() {
@@ -26,7 +26,7 @@ function MessageBubble({ message }) {
   )
 }
 
-export function ChatArea({ chat, onSendMessage }) {
+export function ChatArea({ chat, dbStatus, onRefreshDbStatus, onSendMessage }) {
   const [draft, setDraft] = useState('')
   const messagesEndRef = useRef(null)
 
@@ -63,6 +63,19 @@ export function ChatArea({ chat, onSendMessage }) {
         <div>
           <p className="panel-kicker">Current Chat</p>
           <h2>{chat?.title ?? '聊天室'}</h2>
+        </div>
+        <div className={`db-status db-status--${dbStatus.state}`} title={dbStatus.detail}>
+          <Database size={16} />
+          <span>{dbStatus.label}</span>
+          <button
+            type="button"
+            className="icon-button db-refresh-button"
+            onClick={onRefreshDbStatus}
+            aria-label="重新檢查 DB 狀態"
+            title="重新檢查 DB 狀態"
+          >
+            <RefreshCw size={14} />
+          </button>
         </div>
       </section>
 

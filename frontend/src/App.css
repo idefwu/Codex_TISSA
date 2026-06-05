@@ -70,7 +70,7 @@ button {
 
 .icon-button:focus-visible,
 .primary-action:focus-visible,
-.settings-button:focus-visible,
+.theme-toggle-button:focus-visible,
 .send-button:focus-visible,
 .chat-select:focus-visible,
 .image-button:focus-visible,
@@ -238,22 +238,41 @@ input:focus-visible {
   border-top: 1px solid var(--border);
 }
 
-.settings-button {
+.settings-panel {
   width: 100%;
   min-height: 42px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  padding: 4px;
   border-radius: 8px;
   color: var(--text);
   background: var(--surface);
+}
+
+.settings-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.theme-toggle-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--accent);
   cursor: pointer;
 }
 
-.settings-button:hover {
-  background: var(--surface-hover);
+.theme-toggle-button:hover {
+  background: var(--accent-hover);
 }
 
 .chat-area {
@@ -281,6 +300,49 @@ input:focus-visible {
   padding: 18px 24px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+
+.db-status {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.db-status--connected {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: color-mix(in srgb, var(--success) 11%, var(--panel));
+}
+
+.db-status--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--panel));
+}
+
+.db-status--checking .db-refresh-button svg {
+  animation: spin 900ms linear infinite;
+}
+
+.db-refresh-button {
+  width: 26px;
+  height: 26px;
+  flex-basis: 26px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .messages-pane {
@@ -475,6 +537,77 @@ input:focus-visible {
   overflow-y: auto;
 }
 
+.db-summary-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.db-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.db-summary-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-card {
+  min-height: 70px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.summary-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.summary-card strong {
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.15;
+  word-break: break-word;
+}
+
+.summary-state {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.summary-state--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--panel));
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -624,6 +757,10 @@ input:focus-visible {
   .chat-header {
     min-height: 62px;
     padding: 14px 16px;
+  }
+
+  .db-status span {
+    display: none;
   }
 
   .messages-pane {

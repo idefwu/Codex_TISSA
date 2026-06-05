@@ -134,17 +134,22 @@ export function Sidebar({
           </nav>
 
           <div className="sidebar-footer">
-            <button
-              type="button"
-              className="settings-button"
-              onClick={onToggleTheme}
-              aria-label="切換 Light / Dark Mode"
-              title="切換 Light / Dark Mode"
-            >
-              <Settings size={18} />
-              <span>設定</span>
-              {theme === 'dark' ? <Moon size={17} /> : <Sun size={17} />}
-            </button>
+            <div className="settings-panel">
+              <div className="settings-label">
+                <Settings size={18} />
+                <span>設定</span>
+              </div>
+              <button
+                type="button"
+                className="theme-toggle-button"
+                onClick={onToggleTheme}
+                aria-label={theme === 'dark' ? '切換到 Light Mode' : '切換到 Dark Mode'}
+                title={theme === 'dark' ? '切換到 Light Mode' : '切換到 Dark Mode'}
+              >
+                {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+                <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
+              </button>
+            </div>
           </div>
         </>
       )}

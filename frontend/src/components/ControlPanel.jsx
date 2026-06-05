@@ -1,6 +1,10 @@
-import { ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Database, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 
 const modelOptions = ['gpt-4o', 'gpt-5.5', 'gpt-5.4']
+
+const moneyFormatter = new Intl.NumberFormat('zh-TW', {
+  maximumFractionDigits: 0,
+})
 
 function ToggleControl({ checked, label, name, onChange }) {
   return (
@@ -16,15 +20,27 @@ function ToggleControl({ checked, label, name, onChange }) {
   )
 }
 
+function SummaryCard({ label, value }) {
+  return (
+    <div className="summary-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
 export function ControlPanel({
   collapsed,
   controls,
+  dbSummary,
   mobileOpen,
   onCloseMobile,
+  onRefreshDbSummary,
   onToggleCollapsed,
   onUpdateControl,
 }) {
   const isCompact = collapsed && !mobileOpen
+  const summary = dbSummary.data
 
   return (
     <aside className={`control-panel ${isCompact ? 'control-panel--collapsed' : ''} ${mobileOpen ? 'control-panel--mobile-open' : ''}`}>
@@ -63,6 +79,49 @@ export function ControlPanel({
         </div>
       ) : (
         <div className="control-content">
+          <section className="db-summary-panel">
+            <div className="db-summary-header">
+              <div>
+                <p className="panel-kicker">Database</p>
+                <h3>DB 概況</h3>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={onRefreshDbSummary}
+                aria-label="重新整理 DB 概況"
+                title="重新整理 DB 概況"
+              >
+                <RefreshCw size={16} />
+              </button>
+            </div>
+
+            {dbSummary.state === 'loading' ? (
+              <div className="summary-state">
+                <Database size={16} />
+                載入中
+              </div>
+            ) : null}
+
+            {dbSummary.state === 'error' ? (
+              <div className="summary-state summary-state--error">
+                <Database size={16} />
+                {dbSummary.error}
+              </div>
+            ) : null}
+
+            {summary ? (
+              <div className="summary-grid">
+                <SummaryCard label="員工" value={summary.employee_count} />
+                <SummaryCard label="廠商" value={summary.vendor_count} />
+                <SummaryCard label="費用筆數" value={summary.expense_count} />
+                <SummaryCard label="發票" value={summary.invoice_count} />
+                <SummaryCard label="費用總額" value={`${moneyFormatter.format(summary.expense_total)} ${summary.currency}`} />
+                <SummaryCard label="發票總額" value={`${moneyFormatter.format(summary.invoice_total)} ${summary.currency}`} />
+              </div>
+            ) : null}
+          </section>
+
           <label className="field">
             <span>模型選擇</span>
             <select value={controls.model} onChange={(event) => onUpdateControl('model', event.target.value)}>

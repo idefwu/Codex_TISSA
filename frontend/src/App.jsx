@@ -31,7 +31,7 @@ const createChat = (title) => ({
   id: createId(),
   title,
   messages: [
-    createAssistantMessage('你好，我是 DB Agent Chat 的前端原型。這一階段我會先用假回覆模擬聊天流程。'),
+    createAssistantMessage('你好，我是 DB Agent Chat 的前端原型。這一階段會先透過後端 mock API 回覆。'),
   ],
 })
 
@@ -47,6 +47,28 @@ const initialControls = {
   auditLog: true,
 }
 
+const fetchDbHealth = async () => {
+  const response = await fetch('/api/db/health')
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `HTTP ${response.status}`)
+  }
+
+  return data
+}
+
+const fetchDbSummary = async () => {
+  const response = await fetch('/api/db/summary')
+  const data = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `HTTP ${response.status}`)
+  }
+
+  return data.summary
+}
+
 function App() {
   const [workspace, setWorkspace] = useState(() => {
     const firstChat = createChat('課程助理')
@@ -56,6 +78,16 @@ function App() {
     }
   })
   const [controls, setControls] = useState(initialControls)
+  const [dbStatus, setDbStatus] = useState({
+    state: 'checking',
+    label: 'DB checking',
+    detail: '',
+  })
+  const [dbSummary, setDbSummary] = useState({
+    state: 'loading',
+    data: null,
+    error: '',
+  })
   const [theme, setTheme] = useState('light')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isControlCollapsed, setIsControlCollapsed] = useState(false)
@@ -66,6 +98,110 @@ function App() {
     () => workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? workspace.chats[0],
     [workspace],
   )
+
+  const refreshDbStatus = () => {
+    setDbStatus({
+      state: 'checking',
+      label: 'DB checking',
+      detail: '',
+    })
+
+    fetchDbHealth()
+      .then((data) => {
+        setDbStatus({
+          state: 'connected',
+          label: 'DB connected',
+          detail: data.database?.version ? `MySQL ${data.database.version}` : 'Connected',
+        })
+      })
+      .catch((error) => {
+        setDbStatus({
+          state: 'error',
+          label: 'DB error',
+          detail: error instanceof Error ? error.message : 'Database unavailable',
+        })
+      })
+  }
+
+  const refreshDbSummary = () => {
+    setDbSummary({
+      state: 'loading',
+      data: null,
+      error: '',
+    })
+
+    fetchDbSummary()
+      .then((summary) => {
+        setDbSummary({
+          state: 'ready',
+          data: summary,
+          error: '',
+        })
+      })
+      .catch((error) => {
+        setDbSummary({
+          state: 'error',
+          data: null,
+          error: error instanceof Error ? error.message : 'Unable to load DB summary',
+        })
+      })
+  }
+
+  useEffect(() => {
+    let isCurrent = true
+
+    fetchDbHealth()
+      .then((data) => {
+        if (isCurrent) {
+          setDbStatus({
+            state: 'connected',
+            label: 'DB connected',
+            detail: data.database?.version ? `MySQL ${data.database.version}` : 'Connected',
+          })
+        }
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          setDbStatus({
+            state: 'error',
+            label: 'DB error',
+            detail: error instanceof Error ? error.message : 'Database unavailable',
+          })
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    fetchDbSummary()
+      .then((summary) => {
+        if (isCurrent) {
+          setDbSummary({
+            state: 'ready',
+            data: summary,
+            error: '',
+          })
+        }
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          setDbSummary({
+            state: 'error',
+            data: null,
+            error: error instanceof Error ? error.message : 'Unable to load DB summary',
+          })
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   useEffect(() => {
     const pendingTimers = pendingTimersRef.current
@@ -126,6 +262,28 @@ function App() {
     })
   }
 
+  const replaceThinkingMessage = (chatId, messageId, content) => {
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === chatId
+          ? {
+              ...chat,
+              messages: chat.messages.map((message) =>
+                message.id === messageId
+                  ? {
+                      ...message,
+                      content,
+                      isThinking: false,
+                    }
+                  : message,
+              ),
+            }
+          : chat,
+      ),
+    }))
+  }
+
   const sendMessage = (content) => {
     const trimmedContent = content.trim()
 
@@ -134,6 +292,7 @@ function App() {
     }
 
     const chatId = activeChat.id
+    const selectedModel = controls.model
     const userMessage = createUserMessage(trimmedContent)
     const thinkingMessage = createAssistantMessage('', { isThinking: true })
 
@@ -146,27 +305,48 @@ function App() {
       ),
     }))
 
-    const timerId = window.setTimeout(() => {
-      setWorkspace((current) => ({
-        ...current,
-        chats: current.chats.map((chat) =>
-          chat.id === chatId
-            ? {
-                ...chat,
-                messages: chat.messages.map((message) =>
-                  message.id === thinkingMessage.id
-                    ? {
-                        ...message,
-                        content: `我收到你的訊息了：${trimmedContent}。下一階段會串接後端與 LLM。`,
-                        isThinking: false,
-                      }
-                    : message,
-                ),
-              }
-          : chat,
-        ),
-      }))
-      pendingTimersRef.current.delete(timerId)
+    const timerId = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: trimmedContent,
+            model: selectedModel,
+            temperature: controls.temperature,
+            systemPrompt: controls.systemPrompt,
+            memoryRounds: controls.memoryRounds,
+            tools: {
+              contextRouter: controls.contextRouter,
+              dbQuery: controls.dbQuery,
+              rag: controls.rag,
+              imageSkill: controls.imageSkill,
+              auditLog: controls.auditLog,
+            },
+          }),
+        })
+        const data = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          throw new Error(data.message || `HTTP ${response.status}`)
+        }
+
+        replaceThinkingMessage(
+          chatId,
+          thinkingMessage.id,
+          data.reply || `我收到你的訊息了：${trimmedContent}。下一階段會串接後端與 LLM。`,
+        )
+      } catch (error) {
+        replaceThinkingMessage(
+          chatId,
+          thinkingMessage.id,
+          `後端目前無法回覆：${error instanceof Error ? error.message : 'unknown error'}`,
+        )
+      } finally {
+        pendingTimersRef.current.delete(timerId)
+      }
     }, 2000)
 
     pendingTimersRef.current.add(timerId)
@@ -222,13 +402,20 @@ function App() {
         onToggleTheme={toggleTheme}
       />
 
-      <ChatArea chat={activeChat} onSendMessage={sendMessage} />
+      <ChatArea
+        chat={activeChat}
+        dbStatus={dbStatus}
+        onRefreshDbStatus={refreshDbStatus}
+        onSendMessage={sendMessage}
+      />
 
       <ControlPanel
         collapsed={isControlCollapsed}
         controls={controls}
+        dbSummary={dbSummary}
         mobileOpen={mobileDrawer === 'controls'}
         onCloseMobile={() => setMobileDrawer(null)}
+        onRefreshDbSummary={refreshDbSummary}
         onToggleCollapsed={() => setIsControlCollapsed((current) => !current)}
         onUpdateControl={updateControl}
       />
