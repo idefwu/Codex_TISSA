@@ -1,101 +1,245 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { MessageSquareText, SlidersHorizontal } from 'lucide-react'
+import { ChatArea } from './components/ChatArea'
+import { ControlPanel } from './components/ControlPanel'
+import { Sidebar } from './components/Sidebar'
 import './App.css'
 
-function App() {
-  const [health, setHealth] = useState(null)
-  const [isChecking, setIsChecking] = useState(true)
-  const [error, setError] = useState('')
-
-  const fetchBackendHealth = async () => {
-    const response = await fetch('/api/health')
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const data = await response.json()
-    return { ...data, checkedAt: new Date().toLocaleTimeString() }
+const createId = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID()
   }
 
-  const checkBackend = useCallback(async () => {
-    setIsChecking(true)
-    setError('')
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
-    try {
-      setHealth(await fetchBackendHealth())
-    } catch (err) {
-      setHealth(null)
-      setError(err instanceof Error ? err.message : 'Unable to connect')
-    } finally {
-      setIsChecking(false)
+const createAssistantMessage = (content, options = {}) => ({
+  id: createId(),
+  role: 'assistant',
+  content,
+  isThinking: false,
+  ...options,
+})
+
+const createUserMessage = (content) => ({
+  id: createId(),
+  role: 'user',
+  content,
+})
+
+const createChat = (title) => ({
+  id: createId(),
+  title,
+  messages: [
+    createAssistantMessage('你好，我是 DB Agent Chat 的前端原型。這一階段我會先用假回覆模擬聊天流程。'),
+  ],
+})
+
+const initialControls = {
+  model: 'gpt-4o',
+  temperature: 0.4,
+  systemPrompt: '你是協助查詢員工與財務資料的 AI Agent。',
+  memoryRounds: 5,
+  contextRouter: true,
+  dbQuery: true,
+  rag: false,
+  imageSkill: false,
+  auditLog: true,
+}
+
+function App() {
+  const [workspace, setWorkspace] = useState(() => {
+    const firstChat = createChat('課程助理')
+    return {
+      activeChatId: firstChat.id,
+      chats: [firstChat],
     }
-  }, [])
+  })
+  const [controls, setControls] = useState(initialControls)
+  const [theme, setTheme] = useState('light')
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [isControlCollapsed, setIsControlCollapsed] = useState(false)
+  const [mobileDrawer, setMobileDrawer] = useState(null)
+  const pendingTimersRef = useRef(new Set())
+
+  const activeChat = useMemo(
+    () => workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? workspace.chats[0],
+    [workspace],
+  )
 
   useEffect(() => {
-    let isCurrent = true
-
-    fetchBackendHealth()
-      .then((data) => {
-        if (isCurrent) {
-          setHealth(data)
-        }
-      })
-      .catch((err) => {
-        if (isCurrent) {
-          setHealth(null)
-          setError(err instanceof Error ? err.message : 'Unable to connect')
-        }
-      })
-      .finally(() => {
-        if (isCurrent) {
-          setIsChecking(false)
-        }
-      })
+    const pendingTimers = pendingTimersRef.current
 
     return () => {
-      isCurrent = false
+      pendingTimers.forEach((timerId) => window.clearTimeout(timerId))
     }
   }, [])
 
-  const statusLabel = health?.status === 'ok' ? 'Connected' : 'Disconnected'
+  const addChat = () => {
+    setWorkspace((current) => {
+      const newChat = createChat(`新聊天室 ${current.chats.length + 1}`)
+      return {
+        activeChatId: newChat.id,
+        chats: [newChat, ...current.chats],
+      }
+    })
+    setMobileDrawer(null)
+  }
+
+  const selectChat = (chatId) => {
+    setWorkspace((current) => ({
+      ...current,
+      activeChatId: chatId,
+    }))
+    setMobileDrawer(null)
+  }
+
+  const renameChat = (chatId, title) => {
+    const trimmedTitle = title.trim()
+
+    if (!trimmedTitle) {
+      return
+    }
+
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, title: trimmedTitle } : chat)),
+    }))
+  }
+
+  const deleteChat = (chatId) => {
+    setWorkspace((current) => {
+      const nextChats = current.chats.filter((chat) => chat.id !== chatId)
+
+      if (nextChats.length === 0) {
+        const replacementChat = createChat('新聊天室 1')
+        return {
+          activeChatId: replacementChat.id,
+          chats: [replacementChat],
+        }
+      }
+
+      return {
+        activeChatId: current.activeChatId === chatId ? nextChats[0].id : current.activeChatId,
+        chats: nextChats,
+      }
+    })
+  }
+
+  const sendMessage = (content) => {
+    const trimmedContent = content.trim()
+
+    if (!trimmedContent || !activeChat?.id) {
+      return
+    }
+
+    const chatId = activeChat.id
+    const userMessage = createUserMessage(trimmedContent)
+    const thinkingMessage = createAssistantMessage('', { isThinking: true })
+
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === chatId
+          ? { ...chat, messages: [...chat.messages, userMessage, thinkingMessage] }
+          : chat,
+      ),
+    }))
+
+    const timerId = window.setTimeout(() => {
+      setWorkspace((current) => ({
+        ...current,
+        chats: current.chats.map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                messages: chat.messages.map((message) =>
+                  message.id === thinkingMessage.id
+                    ? {
+                        ...message,
+                        content: `我收到你的訊息了：${trimmedContent}。下一階段會串接後端與 LLM。`,
+                        isThinking: false,
+                      }
+                    : message,
+                ),
+              }
+          : chat,
+        ),
+      }))
+      pendingTimersRef.current.delete(timerId)
+    }, 2000)
+
+    pendingTimersRef.current.add(timerId)
+  }
+
+  const updateControl = (name, value) => {
+    setControls((current) => ({
+      ...current,
+      [name]: value,
+    }))
+  }
+
+  const toggleTheme = () => {
+    setTheme((current) => (current === 'dark' ? 'light' : 'dark'))
+  }
 
   return (
-    <main className="app-shell">
-      <section className="status-panel">
-        <p className="eyebrow">OpenAI Codex Course</p>
-        <h1>DB Agent Chat</h1>
-        <p className="subtitle">React + Flask starter for the database agent system.</p>
-
-        <div className={`status-card ${health?.status === 'ok' ? 'is-online' : 'is-offline'}`}>
-          <span className="status-dot" aria-hidden="true" />
-          <div>
-            <p className="status-label">Backend Status</p>
-            <strong>{isChecking ? 'Checking...' : statusLabel}</strong>
-          </div>
-        </div>
-
-        <dl className="details">
-          <div>
-            <dt>Service</dt>
-            <dd>{health?.service ?? '-'}</dd>
-          </div>
-          <div>
-            <dt>Last Check</dt>
-            <dd>{health?.checkedAt ?? '-'}</dd>
-          </div>
-          <div>
-            <dt>Endpoint</dt>
-            <dd>/api/health</dd>
-          </div>
-        </dl>
-
-        {error ? <p className="error-message">Connection failed: {error}</p> : null}
-
-        <button type="button" onClick={checkBackend} disabled={isChecking}>
-          {isChecking ? 'Checking...' : 'Recheck backend'}
+    <div className="app-shell" data-theme={theme}>
+      <header className="mobile-topbar">
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setMobileDrawer('chats')}
+          aria-label="開啟聊天室列表"
+          title="開啟聊天室列表"
+        >
+          <MessageSquareText size={18} />
         </button>
-      </section>
-    </main>
+        <strong>DB Agent Chat</strong>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setMobileDrawer('controls')}
+          aria-label="開啟控制面板"
+          title="開啟控制面板"
+        >
+          <SlidersHorizontal size={18} />
+        </button>
+      </header>
+
+      <Sidebar
+        chats={workspace.chats}
+        activeChatId={workspace.activeChatId}
+        collapsed={isSidebarCollapsed}
+        mobileOpen={mobileDrawer === 'chats'}
+        theme={theme}
+        onAddChat={addChat}
+        onCloseMobile={() => setMobileDrawer(null)}
+        onDeleteChat={deleteChat}
+        onRenameChat={renameChat}
+        onSelectChat={selectChat}
+        onToggleCollapsed={() => setIsSidebarCollapsed((current) => !current)}
+        onToggleTheme={toggleTheme}
+      />
+
+      <ChatArea chat={activeChat} onSendMessage={sendMessage} />
+
+      <ControlPanel
+        collapsed={isControlCollapsed}
+        controls={controls}
+        mobileOpen={mobileDrawer === 'controls'}
+        onCloseMobile={() => setMobileDrawer(null)}
+        onToggleCollapsed={() => setIsControlCollapsed((current) => !current)}
+        onUpdateControl={updateControl}
+      />
+
+      <button
+        type="button"
+        className={`drawer-backdrop ${mobileDrawer ? 'drawer-backdrop--visible' : ''}`}
+        onClick={() => setMobileDrawer(null)}
+        aria-label="關閉抽屜"
+      />
+    </div>
   )
 }
 
