@@ -13,10 +13,12 @@ from app.llm import (
     check_llm_connection,
     clamp_temperature,
     generate_llm_reply,
+    normalize_memory_rounds,
     normalize_model,
     normalize_system_prompt,
 )
 from app.models import ChatMessage, ChatRoom, Department, Employee, ExpenseReport, Invoice, Vendor
+from app.router import ROUTE_NAMES, RouterDecision, classify_context_route, router_decision_to_dict
 
 
 def decimal_to_float(value):
@@ -47,6 +49,132 @@ def serialize_chat_room(room):
         "updated_at": room.updated_at.isoformat(),
         "message_count": len(room.messages),
     }
+
+
+def load_recent_chat_history(session, room_id: int, memory_rounds: int) -> list[dict]:
+    rows = (
+        session.query(ChatMessage)
+        .filter(ChatMessage.room_id == room_id)
+        .filter(ChatMessage.role.in_(("user", "assistant")))
+        .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
+        .limit(memory_rounds * 2)
+        .all()
+    )
+
+    return [
+        {
+            "role": message.role,
+            "content": message.content,
+        }
+        for message in reversed(rows)
+    ]
+
+
+def load_recent_chat_history_before_message(session, room_id: int, memory_rounds: int, message: ChatMessage) -> list[dict]:
+    rows = (
+        session.query(ChatMessage)
+        .filter(ChatMessage.room_id == room_id)
+        .filter(ChatMessage.role.in_(("user", "assistant")))
+        .filter(
+            (ChatMessage.created_at < message.created_at)
+            | ((ChatMessage.created_at == message.created_at) & (ChatMessage.id < message.id))
+        )
+        .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
+        .limit(memory_rounds * 2)
+        .all()
+    )
+
+    return [
+        {
+            "role": row.role,
+            "content": row.content,
+        }
+        for row in reversed(rows)
+    ]
+
+
+def required_capability_for_route(route: str) -> str:
+    return {
+        "general_chat": "llm",
+        "db_query": "db_query",
+        "db_write": "db_write",
+        "rag": "rag",
+        "image_skill": "image_skill",
+    }.get(route, "llm")
+
+
+def build_controls(payload: dict, model: str, temperature: float, system_prompt: str, memory_rounds: int) -> dict:
+    tools = payload.get("tools", {}) if isinstance(payload.get("tools", {}), dict) else {}
+    return {
+        "model": model,
+        "temperature": temperature,
+        "system_prompt": system_prompt,
+        "memory_rounds": memory_rounds,
+        "auto_route": bool(payload.get("autoRoute", True)),
+        "tools": tools,
+    }
+
+
+def get_route_disabled_message(route: str, tools: dict) -> str | None:
+    if route == "db_query" and not tools.get("dbQuery"):
+        return "DB Query 尚未啟用，請先在右側開啟。"
+    if route == "rag" and not tools.get("rag"):
+        return "RAG 尚未啟用，請先在右側開啟。"
+    if route == "image_skill" and not tools.get("imageSkill"):
+        return "Image Skill 尚未啟用，請先在右側開啟。"
+    return None
+
+
+def execute_route_for_user_message(
+    *,
+    session,
+    room: ChatRoom,
+    user_message: ChatMessage,
+    controls: dict,
+    history: list[dict],
+    router_decision: RouterDecision | None,
+) -> ChatMessage:
+    route = router_decision.route if router_decision else "general_chat"
+    metadata = {
+        "source": "openai" if route == "general_chat" else "route-placeholder",
+        "controls": controls,
+        "route": router_decision_to_dict(router_decision) if router_decision else None,
+        "memory": {
+            "rounds_requested": controls["memory_rounds"],
+            "history_messages_sent": len(history),
+        },
+    }
+
+    disabled_message = get_route_disabled_message(route, controls["tools"])
+    if disabled_message:
+        content = disabled_message
+        metadata["source"] = "capability-disabled"
+    elif route != "general_chat":
+        content = "此能力將在下一階段啟用。"
+    else:
+        llm_reply = generate_llm_reply(
+            history=history,
+            message=user_message.content,
+            model=controls["model"],
+            system_prompt=controls["system_prompt"],
+            temperature=controls["temperature"],
+        )
+        content = llm_reply.content
+        controls["model"] = llm_reply.model
+
+    assistant_message = ChatMessage(
+        room_id=room.id,
+        role="assistant",
+        content=content,
+        metadata_json=metadata,
+        model=controls["model"],
+    )
+    room.updated_at = datetime.utcnow()
+    session.add(assistant_message)
+    session.commit()
+    session.refresh(room)
+    session.refresh(assistant_message)
+    return assistant_message
 
 
 def create_app() -> Flask:
@@ -427,10 +555,8 @@ def create_app() -> Flask:
         model = normalize_model(payload.get("model"))
         temperature = clamp_temperature(payload.get("temperature"))
         system_prompt = normalize_system_prompt(payload.get("systemPrompt"))
-        try:
-            memory_rounds = min(max(int(payload.get("memoryRounds", 5)), 1), 10)
-        except (TypeError, ValueError):
-            memory_rounds = 5
+        memory_rounds = normalize_memory_rounds(payload.get("memoryRounds"))
+        context_router_enabled = bool((payload.get("tools") or {}).get("contextRouter"))
 
         if not message:
             return jsonify({"status": "error", "message": "Message is required."}), 400
@@ -442,32 +568,29 @@ def create_app() -> Flask:
             if room is None:
                 return jsonify({"status": "error", "message": "Chat room not found."}), 404
 
-            controls = {
-                "model": model,
-                "temperature": temperature,
-                "system_prompt": system_prompt,
-                "memory_rounds": memory_rounds,
-                "tools": payload.get("tools", {}),
-            }
-            history_rows = (
-                session.query(ChatMessage)
-                .filter(ChatMessage.room_id == room_id)
-                .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
-                .limit(memory_rounds * 2)
-                .all()
-            )
-            history = [
-                {
-                    "role": history_message.role,
-                    "content": history_message.content,
-                }
-                for history_message in reversed(history_rows)
-            ]
+            controls = build_controls(payload, model, temperature, system_prompt, memory_rounds)
+            history = load_recent_chat_history(session, room_id, memory_rounds)
+            router_decision = None
+            router_fallback = False
+
+            if context_router_enabled:
+                router_decision, router_fallback = classify_context_route(message=message, model=model)
+
             user_message = ChatMessage(
                 room_id=room.id,
                 role="user",
                 content=message,
-                metadata_json={"source": "frontend", "controls": controls, "llm_status": "submitted"},
+                metadata_json={
+                    "source": "frontend",
+                    "controls": controls,
+                    "llm_status": "submitted",
+                    "route": router_decision_to_dict(router_decision) if router_decision else None,
+                    "route_fallback": router_fallback,
+                    "memory": {
+                        "rounds_requested": memory_rounds,
+                        "history_messages_sent": len(history),
+                    },
+                },
                 model=model,
             )
 
@@ -477,13 +600,29 @@ def create_app() -> Flask:
             session.refresh(room)
             session.refresh(user_message)
 
+            if context_router_enabled and not controls["auto_route"]:
+                return (
+                    jsonify(
+                        {
+                            "status": "needs_route_confirmation",
+                            "room": serialize_chat_room(room),
+                            "messages": [serialize_chat_message(user_message)],
+                            "router_decision": router_decision_to_dict(router_decision),
+                            "router_fallback": router_fallback,
+                            "pending_user_message_id": user_message.id,
+                        }
+                    ),
+                    202,
+                )
+
             try:
-                llm_reply = generate_llm_reply(
+                assistant_message = execute_route_for_user_message(
+                    session=session,
+                    room=room,
+                    user_message=user_message,
+                    controls=controls,
                     history=history,
-                    message=message,
-                    model=model,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
+                    router_decision=router_decision,
                 )
             except LLMConfigurationError as exc:
                 return (
@@ -512,23 +651,12 @@ def create_app() -> Flask:
                     502,
                 )
 
-            assistant_message = ChatMessage(
-                room_id=room.id,
-                role="assistant",
-                content=llm_reply.content,
-                metadata_json={"source": "openai", "controls": controls},
-                model=llm_reply.model,
-            )
-            room.updated_at = datetime.utcnow()
-            session.add(assistant_message)
-            session.commit()
-            session.refresh(room)
-            session.refresh(assistant_message)
-
             return jsonify(
                 {
                     "status": "ok",
                     "room": serialize_chat_room(room),
+                    "router_decision": router_decision_to_dict(router_decision) if router_decision else None,
+                    "router_fallback": router_fallback,
                     "messages": [
                         serialize_chat_message(user_message),
                         serialize_chat_message(assistant_message),
@@ -538,6 +666,68 @@ def create_app() -> Flask:
         except SQLAlchemyError as exc:
             session.rollback()
             return jsonify({"status": "error", "message": "Unable to save chat message.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.post("/api/chat/rooms/<int:room_id>/messages/<int:message_id>/execute")
+    def execute_chat_room_message(room_id, message_id):
+        payload = request.get_json(silent=True) or {}
+        selected_route = str(payload.get("route", "")).strip()
+        model = normalize_model(payload.get("model"))
+        temperature = clamp_temperature(payload.get("temperature"))
+        system_prompt = normalize_system_prompt(payload.get("systemPrompt"))
+        memory_rounds = normalize_memory_rounds(payload.get("memoryRounds"))
+
+        if selected_route not in ROUTE_NAMES:
+            return jsonify({"status": "error", "message": "Invalid route selected."}), 400
+
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            user_message = session.get(ChatMessage, message_id)
+            if user_message is None or user_message.room_id != room_id or user_message.role != "user":
+                return jsonify({"status": "error", "message": "Pending user message not found."}), 404
+
+            controls = build_controls(payload, model, temperature, system_prompt, memory_rounds)
+            history = load_recent_chat_history_before_message(session, room_id, memory_rounds, user_message)
+            router_decision = RouterDecision(
+                route=selected_route,
+                confidence=float(payload.get("confidence", 1)),
+                reason=str(payload.get("reason", "Human selected route.")).strip() or "Human selected route.",
+                required_capability=required_capability_for_route(selected_route),
+                suggested_followup_question=payload.get("suggested_followup_question"),
+            )
+
+            try:
+                assistant_message = execute_route_for_user_message(
+                    session=session,
+                    room=room,
+                    user_message=user_message,
+                    controls=controls,
+                    history=history,
+                    router_decision=router_decision,
+                )
+            except LLMConfigurationError as exc:
+                return jsonify({"status": "error", "message": "OpenAI API key is not configured.", "error": str(exc)}), 400
+            except LLMRequestError as exc:
+                return jsonify({"status": "error", "message": "OpenAI API request failed.", "error": str(exc)}), 502
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "room": serialize_chat_room(room),
+                    "router_decision": router_decision_to_dict(router_decision),
+                    "router_fallback": False,
+                    "messages": [serialize_chat_message(assistant_message)],
+                }
+            )
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to execute selected route.", "error": str(exc)}), 503
         finally:
             session.close()
 

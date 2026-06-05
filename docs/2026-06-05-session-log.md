@@ -338,6 +338,266 @@ Finance demo room
 - `npm run lint` 通過。
 - `npm run build` 通過。
 
+### 第 7 階段：串接 OpenAI API
+
+使用者要求將聊天回覆從 mock response 改為真實 OpenAI API 回覆。
+
+安全處理：
+
+- 先安全檢查 `.env` 是否有 `OPENAI_API_KEY`。
+- 不讀出、不顯示、不提交完整 API Key。
+- 使用者確認重用 `.env` 內現有的 `OPENAI_API_KEY`。
+- `.env` 仍由 `.gitignore` 排除。
+- `.env.example` 只保留 placeholder。
+
+後端完成內容：
+
+- 新增 `backend/app/llm.py`：
+  - 建立 OpenAI client。
+  - 判斷 key 是否存在或仍為 placeholder。
+  - 遮罩 key，例如 `sk-...abcd`。
+  - 檢查 OpenAI API health。
+  - 呼叫 OpenAI Responses API 產生回覆。
+- `backend/requirements.txt` 新增：
+
+```text
+openai>=2.0,<3.0
+```
+
+- 新增 `GET /api/llm/health`：
+  - 檢查 `OPENAI_API_KEY` 是否存在。
+  - 成功時回傳遮罩 key 與 reachable 狀態。
+  - key 不存在或 API 呼叫失敗時，回傳清楚錯誤訊息。
+- 修改 `POST /api/chat/rooms/:id/messages`：
+  - 接收前端傳來的 `model`、`temperature`、`systemPrompt`、`memoryRounds`。
+  - 呼叫 OpenAI API 產生 assistant 回覆。
+  - user 訊息與 assistant 回覆都寫入 `chat_messages`。
+  - LLM 失敗時不讓前端整個壞掉，回傳可理解錯誤。
+
+前端完成內容：
+
+- 新增 `react-markdown`。
+- assistant 回覆若包含 Markdown，會正常渲染標題、清單、程式碼區塊。
+- 右側 Control Panel 新增 `LLM Health` 區塊。
+- 顯示 API Key 是否設定、遮罩後 key、錯誤原因。
+- 模型欄位改為可輸入，也可用候選值選擇。
+- Temperature slider 維持 0 到 1。
+- System Prompt textarea 的內容會在下一次送出時生效。
+
+驗證：
+
+- `GET /api/llm/health` 成功，OpenAI API reachable。
+- 回傳 key 為遮罩格式，沒有完整 key。
+- 真實送出一則 `gpt-4o` 對話成功。
+- assistant 回覆已寫入資料庫。
+- 前端可看到 LLM Health。
+- Markdown 列表已確認正常渲染。
+- `python -m compileall backend/app backend/scripts` 通過。
+- `npm run lint` 通過。
+- `npm run build` 通過。
+
+測試時新增聊天室：
+
+```text
+Stage 7 LLM Test
+```
+
+完成後使用者要求推送到 GitHub，commit 訊息為：
+
+```text
+promp07
+```
+
+推送結果：
+
+```text
+c5fcd9d promp07
+```
+
+### 第 8 階段：加入多輪對話記憶
+
+使用者要求讓右側 `Memory 輪數` 設定真的影響 LLM prompt。
+
+需求重點：
+
+- Memory 範圍 1 到 10。
+- 一輪代表 `user + assistant` 各一則訊息。
+- 每次送出新訊息時，後端根據 `room_id` 從 `chat_messages` 讀取最近 N 輪。
+- 組裝給 LLM 的 messages 包含：
+  - system prompt
+  - 最近 N 輪歷史訊息
+  - 最新 user message
+- 不把整個聊天室塞給 LLM。
+- 不把 `metadata_json` 當成 role message 傳入。
+- 前端聊天上方顯示「目前記憶：N 輪」。
+- README 補充 Memory 輪數的意義。
+
+後端完成內容：
+
+- `backend/app/llm.py` 新增 `normalize_memory_rounds()`，限制範圍 1 到 10。
+- `build_response_input()` 改為明確組裝：
+
+```text
+system
+history user / assistant
+latest user
+```
+
+- `backend/app/__init__.py` 新增 `load_recent_chat_history()`：
+  - 只查詢同一個 `room_id`。
+  - 只允許 `user` / `assistant` role。
+  - 只取最近 `memory_rounds * 2` 則訊息。
+  - 不讀取或傳入 `metadata_json`。
+- 實際使用的 `memory_rounds` 與 `history_messages_sent` 會寫入 message metadata，方便 debug。
+
+前端完成內容：
+
+- `ChatArea` 接收 `memoryRounds`。
+- 聊天室上方顯示：
+
+```text
+目前記憶：N 輪
+```
+
+- 右側原本的 Memory slider 繼續顯示目前輪數，範圍 1 到 10。
+
+README 更新：
+
+- 補充 Memory 輪數意義。
+- 說明一輪是 `user + assistant`。
+- 說明後端只送最近 N 輪，不送整個聊天室，也不送 metadata。
+
+驗證：
+
+- `python -m compileall backend/app backend/scripts` 通過。
+- `npm run lint` 通過。
+- `npm run build` 通過。
+- Smoke test：新聊天室第一則訊息「請只回答 OK」正確回 `OK`。
+- 前端確認顯示 `目前記憶：5 輪`。
+
+Memory 測試流程：
+
+1. 第一輪：`我叫做小明。`
+2. 第二輪：`我喜歡喝拿鐵。`
+3. 第三輪：問 `我喜歡喝什麼？`
+4. 補充觀察：問 `我叫什麼？`
+
+測試結果：
+
+```text
+Memory 1：
+- 問「我喜歡喝什麼？」=> 你喜歡喝拿鐵。
+- 問「我叫什麼？」=> 我不知道。
+- drink question history_messages_sent = 2
+- name question history_messages_sent = 2
+
+Memory 3：
+- 問「我喜歡喝什麼？」=> 你喜歡喝拿鐵。
+- 問「我叫什麼？」=> 你叫小明。
+- drink question history_messages_sent = 4
+- name question history_messages_sent = 6
+```
+
+觀察：
+
+- `我喜歡喝拿鐵` 在最近 1 輪內，所以 Memory 1 與 3 都能回答飲料問題。
+- `我叫做小明` 是更早的資訊，所以 Memory 1 會忘記，Memory 3 會記得。
+- 這確認 Memory 輪數設定已實際影響 LLM 上下文。
+
+### 第 9 階段：建立 Context Router
+
+使用者要求每次送出訊息後，如果 `Enable Context Router` 開啟，後端先請 LLM 判斷任務路由。
+
+支援 route：
+
+```text
+general_chat：一般聊天
+db_query：查詢資料庫，例如員工、部門、費用、發票、廠商
+db_write：新增或修改資料庫資料，例如新增費用、寫入發票
+rag：查公司 SOP 或 MIS 常見問題
+image_skill：圖片辨識，例如發票、收據、文件截圖
+```
+
+後端完成內容：
+
+- 新增 `backend/app/router.py`。
+- 使用 Pydantic model 驗證 router 輸出。
+- Router 輸出欄位：
+  - `route`
+  - `confidence`
+  - `reason`
+  - `required_capability`
+  - `suggested_followup_question`
+- LLM router 若輸出不是合法 JSON，會使用 fallback 規則，不讓系統壞掉。
+- `POST /api/chat/rooms/:id/messages` 支援：
+  - `contextRouter` 開啟時先分類。
+  - `autoRoute` 開啟時自動執行。
+  - `autoRoute` 關閉時回傳 `needs_route_confirmation`。
+- 新增確認執行 endpoint：
+
+```text
+POST /api/chat/rooms/:room_id/messages/:message_id/execute
+```
+
+- 如果 route 對應功能 toggle 未開，會回覆清楚提示。
+- `db_query`、`db_write`、`rag`、`image_skill` 的完整能力尚未實作時，先回覆：
+
+```text
+此能力將在下一階段啟用。
+```
+
+前端完成內容：
+
+- 右側新增 `Auto Route` toggle。
+- Chat Area 在回覆前顯示 Router 判斷卡片。
+- Router 卡片顯示：
+  - AI 建議 route。
+  - confidence。
+  - reason。
+  - 五種 route 按鈕。
+  - AI 判斷的 route 亮起。
+  - 使用者可改選。
+  - `確認執行` 按鈕。
+- Auto Route 關閉時，需使用者確認後才執行。
+
+指定測試案例結果：
+
+```text
+「請問今天心情如何？」=> general_chat
+「資訊部有哪些員工？」=> db_query
+「新增一筆餐費 320 元」=> db_write
+「VPN 連不上怎麼辦？」=> rag
+「這張發票幫我辨識」=> image_skill
+```
+
+五個測試案例皆通過，狀態碼為 `202 needs_route_confirmation`，且未使用 fallback。
+
+額外驗證：
+
+```text
+Enable DB Query 關閉 + 問「資訊部有哪些員工？」
+=> route = db_query
+=> assistant 回覆：DB Query 尚未啟用，請先在右側開啟。
+```
+
+Human-in-the-loop 驗證：
+
+```text
+Auto Route 關閉
+輸入：新增一筆餐費 320 元
+router 建議：db_write
+按「確認執行」
+assistant 回覆：此能力將在下一階段啟用。
+```
+
+前端 UI 驗證：
+
+- `Auto Route` toggle 可見。
+- Router 卡片可見。
+- `General`、`DB Query`、`DB Write`、`RAG`、`Image` 五種 route 按鈕可見。
+- `確認執行` 按鈕可執行。
+- 確認後會顯示對應 assistant 回覆。
+
 ## 今日執行過的重要指令
 
 後端檢查：
@@ -413,15 +673,14 @@ main...origin/main
 目前尚未提交的變更：
 
 ```text
+README.md
 backend/app/__init__.py
-backend/app/models.py
-backend/scripts/init_db.py
-backend/scripts/seed_db.py
+backend/app/llm.py
+backend/app/router.py
 frontend/src/App.css
 frontend/src/App.jsx
 frontend/src/components/ChatArea.jsx
-frontend/src/components/Sidebar.jsx
-docs/2026-06-05-session-log.md
+frontend/src/components/ControlPanel.jsx
 ```
 
 注意：`.env` 已在 `.gitignore` 中，未納入提交內容。
@@ -432,6 +691,8 @@ docs/2026-06-05-session-log.md
 - `frontend/src/components/Sidebar.jsx`：聊天室列表、新增、改名、刪除、模式切換。
 - `frontend/src/components/ChatArea.jsx`：聊天訊息區、輸入框、loading/error 顯示。
 - `frontend/src/components/ControlPanel.jsx`：模型設定與 DB 概況。
+- `backend/app/llm.py`：OpenAI API client、LLM health、prompt 組裝、多輪記憶設定。
+- `backend/app/router.py`：Context Router、Pydantic route 驗證、fallback route 規則。
 - `backend/app/__init__.py`：Flask routes。
 - `backend/app/models.py`：SQLAlchemy models。
 - `backend/app/db.py`：資料庫連線與 health check。
@@ -444,9 +705,9 @@ docs/2026-06-05-session-log.md
 
 建議下一階段可以進入：
 
-1. 將 `POST /api/chat/rooms/:id/messages` 串接 OpenAI API。
-2. 將前端選擇的模型傳給後端並實際使用。
-3. 加入 Context Router，判斷一般聊天、DB 查詢、RAG、圖片辨識。
-4. 建立 SQL Agent 安全查詢層。
-5. 加入 audit log，記錄使用者問題、路由結果、SQL 查詢與回覆摘要。
-6. 加入圖片上傳與辨識流程，使用者確認後再寫入 invoices 或 expenses。
+1. 加入 Context Router，判斷一般聊天、DB 查詢、RAG、圖片辨識。
+2. 建立 SQL Agent 安全查詢層。
+3. 加入 audit log，記錄使用者問題、路由結果、SQL 查詢與回覆摘要。
+4. 加入 RAG 文件資料與 embedding 流程。
+5. 加入圖片上傳與辨識流程，使用者確認後再寫入 invoices 或 expenses。
+6. 補充 API 測試或端對端測試，讓課堂 demo 更穩。

@@ -222,6 +222,12 @@ export function ControlPanel({
               onChange={onUpdateControl}
             />
             <ToggleControl
+              checked={controls.autoRoute}
+              label="Auto Route"
+              name="autoRoute"
+              onChange={onUpdateControl}
+            />
+            <ToggleControl
               checked={controls.dbQuery}
               label="Enable DB Query"
               name="dbQuery"

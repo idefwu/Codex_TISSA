@@ -14,7 +14,8 @@
 - `GET /api/employees`：員工資料
 - `GET /api/expenses`：費用資料
 - `GET /api/invoices`：發票資料
-- `POST /api/chat`：接收前端訊息與模型設定，目前先回傳 mock 回覆
+- `GET /api/llm/health`：OpenAI API Key 與 LLM 連線狀態檢查
+- `POST /api/chat/rooms/:id/messages`：接收前端訊息與模型設定，呼叫 OpenAI API 產生回覆並寫入資料庫
 
 ## 1. 建立環境變數
 
@@ -31,7 +32,7 @@ DATABASE_URL=mysql+pymysql://codex_user:codex_pass@127.0.0.1:3306/codex_demo
 OPENAI_API_KEY=請填入你的 key
 ```
 
-目前 `/api/chat` 尚未真正呼叫 OpenAI API，但前端已經會把右側選擇的模型送到後端。
+`.env` 只放在本機使用，請不要提交到 GitHub。`.env.example` 只能保留 placeholder，不要放入真實 API Key。
 
 ## 2. 啟動 MySQL
 
@@ -122,6 +123,14 @@ http://127.0.0.1:5000/api/db/health
 http://127.0.0.1:5000/api/db/summary
 ```
 
+LLM 健康檢查：
+
+```text
+http://127.0.0.1:5000/api/llm/health
+```
+
+這個 API 只會回傳遮罩後的 key，例如 `sk-...abcd`，不會回傳完整 `OPENAI_API_KEY`。
+
 ## 6. 重啟 Flask 後端
 
 如果你是在 terminal 前景執行 Flask：
@@ -161,6 +170,63 @@ npm run dev
 http://localhost:5173
 ```
 
+## 9. Memory 輪數設定
+
+右側 Control Panel 的 `Memory 輪數` 範圍是 1 到 10。
+
+一輪代表一組歷史對話：
+
+```text
+user 一則訊息 + assistant 一則訊息
+```
+
+每次送出新訊息時，後端會依照目前聊天室 `room_id` 從 `chat_messages` 讀取最近 N 輪歷史訊息，並組裝給 LLM：
+
+```text
+system prompt
+最近 N 輪 user / assistant 歷史訊息
+最新 user message
+```
+
+後端不會把整個聊天室所有訊息都送給 LLM，也不會把 `metadata_json` 當成聊天訊息傳入。這樣可以控制 token 使用量，也能讓課堂 Demo 清楚觀察「記憶輪數」對回答的影響。
+
+## 10. Context Router
+
+右側 Control Panel 的 `Enable Context Router` 開啟時，每次送出訊息後，後端會先請 LLM 判斷這次任務要走哪條路：
+
+```text
+general_chat：一般聊天
+db_query：查詢員工、部門、費用、發票、廠商等資料
+db_write：新增或修改資料庫資料
+rag：查公司 SOP 或 MIS 常見問題
+image_skill：圖片辨識，例如發票、收據、文件截圖
+```
+
+Router 會回傳：
+
+```text
+route
+confidence
+reason
+required_capability
+suggested_followup_question
+```
+
+如果 LLM Router 回傳不是合法 JSON，後端會使用 fallback 規則，不會讓系統壞掉。
+
+右側 `Auto Route` 控制是否自動接受 Router 判斷：
+
+- 開啟：系統自動接受 Router 判斷並執行。
+- 關閉：前端會顯示五種 route 按鈕，讓使用者改選後按「確認執行」。
+
+目前第 9 階段只完成 Context Router 與 Human-in-the-loop 流程。`db_query`、`db_write`、`rag`、`image_skill` 的完整能力會在後續階段實作；目前會先回覆「此能力將在下一階段啟用」。
+
+如果對應功能 toggle 沒開，例如 `Enable DB Query` 關閉但 Router 判斷為 `db_query`，assistant 會回覆：
+
+```text
+DB Query 尚未啟用，請先在右側開啟。
+```
+
 前端會透過 Vite proxy 呼叫 Flask API，所以建議啟動順序是：
 
 1. `docker compose up -d`
@@ -169,7 +235,7 @@ http://localhost:5173
 4. 啟動 Flask 後端
 5. 啟動 React 前端
 
-## 9. 在 Docker 裡查看目前資料
+## 11. 在 Docker 裡查看目前資料
 
 如果你是用本專案的 `docker-compose.yml` 啟動 MySQL，可以進入 MySQL CLI：
 

@@ -17,6 +17,7 @@ const initialControls = {
   systemPrompt: '你是協助查詢員工與財務資料的 AI Agent。',
   memoryRounds: 5,
   contextRouter: true,
+  autoRoute: true,
   dbQuery: true,
   rag: false,
   imageSkill: false,
@@ -79,6 +80,13 @@ const sendChatMessage = async (roomId, payload) => {
   })
   return data
 }
+const executeChatRoute = async (roomId, messageId, payload) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}/messages/${messageId}/execute`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data
+}
 
 function App() {
   const [rooms, setRooms] = useState([])
@@ -87,6 +95,7 @@ function App() {
   const [roomsState, setRoomsState] = useState({ status: 'loading', error: '' })
   const [messagesState, setMessagesState] = useState({ status: 'idle', error: '' })
   const [isSending, setIsSending] = useState(false)
+  const [routeDecision, setRouteDecision] = useState(null)
   const [controls, setControls] = useState(initialControls)
   const [dbStatus, setDbStatus] = useState({
     state: 'checking',
@@ -276,6 +285,7 @@ function App() {
   const addChat = async () => {
     const title = `新聊天室 ${rooms.length + 1}`
     setRoomsState({ status: 'saving', error: '' })
+    setRouteDecision(null)
 
     try {
       const room = await createChatRoom(title)
@@ -294,6 +304,7 @@ function App() {
 
   const selectChat = (roomId) => {
     setActiveRoomId(roomId)
+    setRouteDecision(null)
     setMobileDrawer(null)
   }
 
@@ -371,6 +382,16 @@ function App() {
 
     setMessages((currentMessages) => [...currentMessages, pendingUserMessage, thinkingMessage])
     setMessagesState({ status: 'ready', error: '' })
+    setRouteDecision(
+      controls.contextRouter
+        ? {
+            status: 'routing',
+            router: null,
+            selectedRoute: null,
+            pendingUserMessageId: null,
+          }
+        : null,
+    )
     setIsSending(true)
 
     try {
@@ -381,6 +402,7 @@ function App() {
           temperature: controls.temperature,
           systemPrompt: controls.systemPrompt,
           memoryRounds: controls.memoryRounds,
+          autoRoute: controls.autoRoute,
           tools: {
             contextRouter: controls.contextRouter,
             dbQuery: controls.dbQuery,
@@ -393,12 +415,43 @@ function App() {
       ])
       const savedMessages = data.messages ?? []
 
+      if (data.status === 'needs_route_confirmation') {
+        setMessages((currentMessages) => [
+          ...currentMessages.filter(
+            (message) => message.id !== pendingUserMessage.id && message.id !== thinkingMessage.id,
+          ),
+          ...savedMessages,
+        ])
+        setRouteDecision({
+          status: 'needs_confirmation',
+          router: data.router_decision,
+          selectedRoute: data.router_decision?.route ?? 'general_chat',
+          pendingUserMessageId: data.pending_user_message_id,
+          fallback: data.router_fallback,
+        })
+        if (data.room) {
+          setRooms((currentRooms) => currentRooms.map((room) => (room.id === data.room.id ? data.room : room)))
+        }
+        return
+      }
+
       setMessages((currentMessages) => [
         ...currentMessages.filter(
           (message) => message.id !== pendingUserMessage.id && message.id !== thinkingMessage.id,
         ),
         ...savedMessages,
       ])
+      if (data.router_decision) {
+        setRouteDecision({
+          status: 'completed',
+          router: data.router_decision,
+          selectedRoute: data.router_decision.route,
+          pendingUserMessageId: null,
+          fallback: data.router_fallback,
+        })
+      } else {
+        setRouteDecision(null)
+      }
       if (data.room) {
         setRooms((currentRooms) =>
           currentRooms
@@ -409,6 +462,13 @@ function App() {
     } catch (error) {
       const savedMessages = error.data?.messages ?? []
       const errorMessage = `LLM 目前無法回覆：${error instanceof Error ? error.message : 'unknown error'}`
+      setRouteDecision(error.data?.router_decision ? {
+        status: 'error',
+        router: error.data.router_decision,
+        selectedRoute: error.data.router_decision.route,
+        pendingUserMessageId: null,
+        fallback: error.data.router_fallback,
+      } : null)
 
       setMessages((currentMessages) =>
         savedMessages.length > 0
@@ -441,6 +501,85 @@ function App() {
       setMessagesState({
         status: 'error',
         error: error instanceof Error ? error.message : 'Unable to send chat message',
+      })
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  const selectRoute = (route) => {
+    setRouteDecision((current) => (current ? { ...current, selectedRoute: route } : current))
+  }
+
+  const confirmRoute = async () => {
+    if (!activeRoomId || !routeDecision?.pendingUserMessageId || !routeDecision.selectedRoute) {
+      return
+    }
+
+    const thinkingMessage = {
+      id: createTempId('assistant'),
+      role: 'assistant',
+      content: '',
+      isThinking: true,
+      created_at: new Date().toISOString(),
+    }
+
+    setRouteDecision((current) => (current ? { ...current, status: 'executing' } : current))
+    setMessages((currentMessages) => [...currentMessages, thinkingMessage])
+    setIsSending(true)
+
+    try {
+      const data = await executeChatRoute(activeRoomId, routeDecision.pendingUserMessageId, {
+        route: routeDecision.selectedRoute,
+        confidence: routeDecision.router?.confidence ?? 1,
+        reason:
+          routeDecision.selectedRoute === routeDecision.router?.route
+            ? routeDecision.router?.reason
+            : 'Human selected route.',
+        suggested_followup_question: routeDecision.router?.suggested_followup_question ?? null,
+        model: controls.model,
+        temperature: controls.temperature,
+        systemPrompt: controls.systemPrompt,
+        memoryRounds: controls.memoryRounds,
+        tools: {
+          contextRouter: controls.contextRouter,
+          dbQuery: controls.dbQuery,
+          rag: controls.rag,
+          imageSkill: controls.imageSkill,
+          auditLog: controls.auditLog,
+        },
+      })
+
+      setMessages((currentMessages) => [
+        ...currentMessages.filter((message) => message.id !== thinkingMessage.id),
+        ...(data.messages ?? []),
+      ])
+      setRouteDecision({
+        status: 'completed',
+        router: data.router_decision,
+        selectedRoute: data.router_decision?.route ?? routeDecision.selectedRoute,
+        pendingUserMessageId: null,
+        fallback: data.router_fallback,
+      })
+      if (data.room) {
+        setRooms((currentRooms) => currentRooms.map((room) => (room.id === data.room.id ? data.room : room)))
+      }
+    } catch (error) {
+      setMessages((currentMessages) =>
+        currentMessages.map((message) =>
+          message.id === thinkingMessage.id
+            ? {
+                ...message,
+                content: `Route 執行失敗：${error instanceof Error ? error.message : 'unknown error'}`,
+                isThinking: false,
+              }
+            : message,
+        ),
+      )
+      setRouteDecision((current) => (current ? { ...current, status: 'needs_confirmation' } : current))
+      setMessagesState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to execute selected route',
       })
     } finally {
       setIsSending(false)
@@ -503,8 +642,12 @@ function App() {
         dbStatus={dbStatus}
         isLoading={messagesState.status === 'loading'}
         isSending={isSending}
+        memoryRounds={controls.memoryRounds}
+        routeDecision={routeDecision}
         error={messagesState.error || roomsState.error}
+        onConfirmRoute={confirmRoute}
         onRefreshDbStatus={refreshDbStatus}
+        onSelectRoute={selectRoute}
         onSendMessage={sendMessage}
       />
 

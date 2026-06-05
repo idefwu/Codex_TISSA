@@ -80,6 +80,15 @@ def normalize_system_prompt(system_prompt: str | None) -> str:
     return value or DEFAULT_SYSTEM_PROMPT
 
 
+def normalize_memory_rounds(value) -> int:
+    try:
+        memory_rounds = int(value)
+    except (TypeError, ValueError):
+        memory_rounds = 5
+
+    return min(max(memory_rounds, 1), 10)
+
+
 def check_llm_connection() -> dict:
     api_key = get_openai_api_key()
     masked_key = mask_api_key(api_key)
@@ -121,8 +130,13 @@ def check_llm_connection() -> dict:
         }
 
 
-def build_response_input(history: list[dict], user_message: str) -> list[dict]:
-    input_messages = []
+def build_response_input(system_prompt: str, history: list[dict], user_message: str) -> list[dict]:
+    input_messages = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
+    ]
 
     for message in history:
         role = message.get("role")
@@ -159,8 +173,7 @@ def generate_llm_reply(
         client = get_openai_client()
         response = client.responses.create(
             model=model,
-            instructions=system_prompt,
-            input=build_response_input(history, message),
+            input=build_response_input(system_prompt, history, message),
             temperature=temperature,
         )
         content = (getattr(response, "output_text", "") or "").strip()
