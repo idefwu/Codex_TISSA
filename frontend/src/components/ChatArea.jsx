@@ -1,4 +1,4 @@
-import { Bot, Database, Image, RefreshCw, Send, User } from 'lucide-react'
+import { Bot, CheckCircle2, Database, Image, RefreshCw, Send, User, XCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -11,6 +11,30 @@ const routeOptions = [
 ]
 
 const routeLabelMap = Object.fromEntries(routeOptions.map((route) => [route.value, route.label]))
+
+const dbWriteToolLabels = {
+  create_expense_report: '新增費用資料',
+  create_invoice: '新增發票資料',
+}
+
+const dbWriteFieldLabels = {
+  employee_name: '員工姓名',
+  employee_code: '員工編號',
+  vendor_name: '廠商',
+  expense_date: '費用日期',
+  category: '類別',
+  amount: '金額',
+  currency: '幣別',
+  description: '說明',
+  status: '狀態',
+  invoice_number: '發票號碼',
+  invoice_date: '發票日期',
+  buyer_tax_id: '買方統編',
+  seller_tax_id: '賣方統編',
+  total_amount: '總金額',
+  raw_text: '原始文字',
+  source_image_path: '圖片路徑',
+}
 
 function formatCellValue(value) {
   if (value === null || value === undefined) {
@@ -103,7 +127,98 @@ function SqlAgentDetails({ metadata }) {
   )
 }
 
-function MessageBubble({ message }) {
+function DbWriteDetails({ isBusy, message, metadata, onCancelDbWrite, onConfirmDbWrite }) {
+  const dbWrite = metadata?.db_write
+
+  if (!dbWrite) {
+    return null
+  }
+
+  const status = dbWrite.status
+  const fields = dbWrite.fields ?? {}
+  const resolved = dbWrite.resolved ?? {}
+  const result = dbWrite.result ?? null
+  const warnings = dbWrite.warnings ?? []
+  const isPending = status === 'pending_confirmation'
+  const isNeedsMoreInfo = status === 'needs_more_info'
+  const isConfirmed = status === 'confirmed'
+  const isCancelled = status === 'cancelled'
+
+  return (
+    <div className={`db-write-card db-write-card--${status ?? 'unknown'}`}>
+      <div className="db-write-card-header">
+        <div>
+          <p className="panel-kicker">DB Write</p>
+          <h4>{isPending ? '待確認寫入' : dbWriteToolLabels[dbWrite.tool] ?? 'DB Write'}</h4>
+        </div>
+        {isConfirmed ? <CheckCircle2 size={18} /> : null}
+        {isCancelled ? <XCircle size={18} /> : null}
+      </div>
+
+      {isNeedsMoreInfo ? (
+        <div className="db-write-state">
+          需要補充：{(dbWrite.missing_fields ?? []).join('、') || '欄位資訊'}
+        </div>
+      ) : null}
+
+      {Object.keys(fields).length > 0 ? (
+        <div className="db-write-field-grid">
+          {Object.entries(fields).map(([key, value]) => (
+            <div key={key} className="db-write-field">
+              <span>{dbWriteFieldLabels[key] ?? key}</span>
+              <strong>{formatCellValue(value)}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {resolved.employee_name || resolved.employee_code || resolved.vendor_name ? (
+        <div className="db-write-resolved">
+          {resolved.employee_name ? <span>員工：{resolved.employee_name}（{resolved.employee_code}）</span> : null}
+          {resolved.vendor_name ? <span>廠商：{resolved.vendor_name}</span> : null}
+        </div>
+      ) : null}
+
+      {warnings.length > 0 ? (
+        <div className="db-write-warning">
+          {warnings.map((warning) => (
+            <span key={warning}>{warning}</span>
+          ))}
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="db-write-result">
+          <CheckCircle2 size={16} />
+          <span>{result.summary ?? `新增資料 ID：${result.entity_id}`}</span>
+        </div>
+      ) : null}
+
+      {isPending ? (
+        <div className="db-write-actions">
+          <button
+            type="button"
+            className="db-write-confirm-button"
+            disabled={isBusy}
+            onClick={() => onConfirmDbWrite(message.id)}
+          >
+            確認寫入
+          </button>
+          <button
+            type="button"
+            className="db-write-cancel-button"
+            disabled={isBusy}
+            onClick={() => onCancelDbWrite(message.id)}
+          >
+            取消
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function MessageBubble({ isBusy, message, onCancelDbWrite, onConfirmDbWrite }) {
   const isUser = message.role === 'user'
   const metadata = message.metadata_json ?? {}
 
@@ -120,6 +235,13 @@ function MessageBubble({ message }) {
         ) : (
           <>
             <SqlAgentDetails metadata={metadata} />
+            <DbWriteDetails
+              isBusy={isBusy}
+              message={message}
+              metadata={metadata}
+              onCancelDbWrite={onCancelDbWrite}
+              onConfirmDbWrite={onConfirmDbWrite}
+            />
             <ReactMarkdown
               components={{
                 a: ({ children, ...props }) => (
@@ -202,6 +324,8 @@ export function ChatArea({
   isSending,
   memoryRounds,
   routeDecision,
+  onCancelDbWrite,
+  onConfirmDbWrite,
   onConfirmRoute,
   onRefreshDbStatus,
   onSelectRoute,
@@ -273,7 +397,13 @@ export function ChatArea({
           <div className="empty-chat-state">這個聊天室還沒有訊息。</div>
         ) : null}
         {chat?.messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            isBusy={isSending}
+            message={message}
+            onCancelDbWrite={onCancelDbWrite}
+            onConfirmDbWrite={onConfirmDbWrite}
+          />
         ))}
         <div ref={messagesEndRef} />
       </section>

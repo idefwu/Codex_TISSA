@@ -7,6 +7,7 @@ from sqlalchemy import desc, func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import check_database_connection, create_session, get_engine
+from app.db_write_agent import DBWriteAgentError, DBWriteExecutionError, execute_confirmed_db_write, prepare_db_write_request
 from app.llm import (
     LLMConfigurationError,
     LLMRequestError,
@@ -119,6 +120,8 @@ def build_controls(payload: dict, model: str, temperature: float, system_prompt:
 def get_route_disabled_message(route: str, tools: dict) -> str | None:
     if route == "db_query" and not tools.get("dbQuery"):
         return "DB Query 尚未啟用，請先在右側開啟。"
+    if route == "db_write" and tools.get("dbWrite") is False:
+        return "DB Write 尚未啟用，請先在右側開啟。"
     if route == "rag" and not tools.get("rag"):
         return "RAG 尚未啟用，請先在右側開啟。"
     if route == "image_skill" and not tools.get("imageSkill"):
@@ -175,6 +178,23 @@ def execute_route_for_user_message(
             metadata["sql_agent"] = {
                 "error": str(exc),
                 "stage": exc.stage,
+            }
+    elif route == "db_write":
+        try:
+            db_write_result = prepare_db_write_request(
+                session=session,
+                message=user_message.content,
+                model=controls["model"],
+            )
+            content = db_write_result["assistant_content"]
+            metadata["source"] = db_write_result["source"]
+            metadata["db_write"] = db_write_result["metadata"]
+        except DBWriteAgentError as exc:
+            content = f"DB Write 無法準備寫入：{exc}"
+            metadata["source"] = "db-write-error"
+            metadata["db_write"] = {
+                "status": "error",
+                "error": str(exc),
             }
     elif route != "general_chat":
         content = "此能力將在下一階段啟用。"
@@ -755,6 +775,135 @@ def create_app() -> Flask:
         except SQLAlchemyError as exc:
             session.rollback()
             return jsonify({"status": "error", "message": "Unable to execute selected route.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.post("/api/chat/rooms/<int:room_id>/messages/<int:message_id>/db-write/confirm")
+    def confirm_db_write(room_id, message_id):
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            pending_message = session.get(ChatMessage, message_id)
+            if pending_message is None or pending_message.room_id != room_id or pending_message.role != "assistant":
+                return jsonify({"status": "error", "message": "Pending DB Write message not found."}), 404
+
+            metadata = dict(pending_message.metadata_json or {})
+            db_write = dict(metadata.get("db_write") or {})
+            if db_write.get("status") != "pending_confirmation":
+                return jsonify({"status": "error", "message": "This DB Write request is not pending confirmation."}), 400
+
+            result = execute_confirmed_db_write(
+                session=session,
+                db_write=db_write,
+                source_message_id=pending_message.id,
+            )
+            db_write["status"] = "confirmed"
+            db_write["confirmed_at"] = datetime.utcnow().isoformat()
+            db_write["result"] = result
+            metadata["source"] = "db-write-confirmed"
+            metadata["db_write"] = db_write
+            pending_message.metadata_json = metadata
+
+            assistant_message = ChatMessage(
+                room_id=room.id,
+                role="assistant",
+                content=result["summary"],
+                metadata_json={
+                    "source": "db-write-result",
+                    "related_message_id": pending_message.id,
+                    "db_write": {
+                        "status": "confirmed",
+                        "tool": db_write.get("tool"),
+                        "result": result,
+                    },
+                },
+                model=pending_message.model,
+            )
+            room.updated_at = datetime.utcnow()
+            session.add(assistant_message)
+            session.commit()
+            session.refresh(room)
+            session.refresh(pending_message)
+            session.refresh(assistant_message)
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "room": serialize_chat_room(room),
+                    "updated_message": serialize_chat_message(pending_message),
+                    "messages": [serialize_chat_message(assistant_message)],
+                    "db_write_result": result,
+                }
+            )
+        except DBWriteExecutionError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to complete DB Write.", "error": str(exc)}), 400
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to confirm DB Write.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.post("/api/chat/rooms/<int:room_id>/messages/<int:message_id>/db-write/cancel")
+    def cancel_db_write(room_id, message_id):
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            pending_message = session.get(ChatMessage, message_id)
+            if pending_message is None or pending_message.room_id != room_id or pending_message.role != "assistant":
+                return jsonify({"status": "error", "message": "Pending DB Write message not found."}), 404
+
+            metadata = dict(pending_message.metadata_json or {})
+            db_write = dict(metadata.get("db_write") or {})
+            if db_write.get("status") != "pending_confirmation":
+                return jsonify({"status": "error", "message": "This DB Write request is not pending confirmation."}), 400
+
+            db_write["status"] = "cancelled"
+            db_write["cancelled_at"] = datetime.utcnow().isoformat()
+            metadata["source"] = "db-write-cancelled"
+            metadata["db_write"] = db_write
+            pending_message.metadata_json = metadata
+
+            assistant_message = ChatMessage(
+                room_id=room.id,
+                role="assistant",
+                content="已取消這次待確認寫入，沒有更動資料庫。",
+                metadata_json={
+                    "source": "db-write-cancelled",
+                    "related_message_id": pending_message.id,
+                    "db_write": {
+                        "status": "cancelled",
+                        "tool": db_write.get("tool"),
+                    },
+                },
+                model=pending_message.model,
+            )
+            room.updated_at = datetime.utcnow()
+            session.add(assistant_message)
+            session.commit()
+            session.refresh(room)
+            session.refresh(pending_message)
+            session.refresh(assistant_message)
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "room": serialize_chat_room(room),
+                    "updated_message": serialize_chat_message(pending_message),
+                    "messages": [serialize_chat_message(assistant_message)],
+                }
+            )
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to cancel DB Write.", "error": str(exc)}), 503
         finally:
             session.close()
 

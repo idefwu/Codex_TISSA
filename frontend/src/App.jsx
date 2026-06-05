@@ -19,6 +19,7 @@ const initialControls = {
   contextRouter: true,
   autoRoute: true,
   dbQuery: true,
+  dbWrite: true,
   rag: false,
   imageSkill: false,
   auditLog: true,
@@ -84,6 +85,18 @@ const executeChatRoute = async (roomId, messageId, payload) => {
   const data = await apiRequest(`/api/chat/rooms/${roomId}/messages/${messageId}/execute`, {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+  return data
+}
+const confirmDbWrite = async (roomId, messageId) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}/messages/${messageId}/db-write/confirm`, {
+    method: 'POST',
+  })
+  return data
+}
+const cancelDbWrite = async (roomId, messageId) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}/messages/${messageId}/db-write/cancel`, {
+    method: 'POST',
   })
   return data
 }
@@ -406,6 +419,7 @@ function App() {
           tools: {
             contextRouter: controls.contextRouter,
             dbQuery: controls.dbQuery,
+            dbWrite: controls.dbWrite,
             rag: controls.rag,
             imageSkill: controls.imageSkill,
             auditLog: controls.auditLog,
@@ -544,6 +558,7 @@ function App() {
         tools: {
           contextRouter: controls.contextRouter,
           dbQuery: controls.dbQuery,
+          dbWrite: controls.dbWrite,
           rag: controls.rag,
           imageSkill: controls.imageSkill,
           auditLog: controls.auditLog,
@@ -591,6 +606,66 @@ function App() {
       ...current,
       [name]: value,
     }))
+  }
+
+  const updateDbWriteMessageState = (data) => {
+    setMessages((currentMessages) => {
+      const updatedMessages = data.updated_message
+        ? currentMessages.map((message) => (message.id === data.updated_message.id ? data.updated_message : message))
+        : currentMessages
+      return [...updatedMessages, ...(data.messages ?? [])]
+    })
+
+    if (data.room) {
+      setRooms((currentRooms) =>
+        currentRooms
+          .map((room) => (room.id === data.room.id ? data.room : room))
+          .sort((left, right) => new Date(right.updated_at) - new Date(left.updated_at)),
+      )
+    }
+    refreshDbSummary()
+  }
+
+  const handleConfirmDbWrite = async (messageId) => {
+    if (!activeRoomId || isSending) {
+      return
+    }
+
+    setIsSending(true)
+    setMessagesState({ status: 'ready', error: '' })
+
+    try {
+      const data = await confirmDbWrite(activeRoomId, messageId)
+      updateDbWriteMessageState(data)
+    } catch (error) {
+      setMessagesState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to confirm DB Write',
+      })
+    } finally {
+      setIsSending(false)
+    }
+  }
+
+  const handleCancelDbWrite = async (messageId) => {
+    if (!activeRoomId || isSending) {
+      return
+    }
+
+    setIsSending(true)
+    setMessagesState({ status: 'ready', error: '' })
+
+    try {
+      const data = await cancelDbWrite(activeRoomId, messageId)
+      updateDbWriteMessageState(data)
+    } catch (error) {
+      setMessagesState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to cancel DB Write',
+      })
+    } finally {
+      setIsSending(false)
+    }
   }
 
   const toggleTheme = () => {
@@ -645,6 +720,8 @@ function App() {
         memoryRounds={controls.memoryRounds}
         routeDecision={routeDecision}
         error={messagesState.error || roomsState.error}
+        onCancelDbWrite={handleCancelDbWrite}
+        onConfirmDbWrite={handleConfirmDbWrite}
         onConfirmRoute={confirmRoute}
         onRefreshDbStatus={refreshDbStatus}
         onSelectRoute={selectRoute}

@@ -272,7 +272,48 @@ LLM 整理繁體中文回答
 哪個廠商的發票總金額最高？
 ```
 
-## 12. 在 Docker 裡查看目前資料
+## 12. 受控 DB Write
+
+右側 Control Panel 開啟 `Enable Context Router` 與 `Enable DB Write` 時，如果 Router 判斷本次任務是 `db_write`，後端會走受控白名單工具，而不是讓 LLM 產生任意 `INSERT` / `UPDATE` SQL。
+
+目前白名單工具：
+
+```text
+create_expense_report
+create_invoice
+```
+
+流程：
+
+```text
+自然語言訊息
+Context Router 判斷 db_write
+LLM 只抽取結構化欄位
+Pydantic 驗證欄位
+欄位不足時追問
+欄位足夠時前端顯示「待確認寫入」卡片
+使用者按「確認寫入」才呼叫後端新增資料
+寫入成功後顯示新增資料 ID
+audit_logs 記錄寫入操作
+```
+
+安全限制：
+
+- LLM 不會直接產生或執行 `INSERT` / `UPDATE` SQL。
+- 後端只會執行固定 Python function：`create_expense_report` 或 `create_invoice`。
+- 使用者未按「確認寫入」前，不會改動資料庫。
+- 使用者可以按「取消」，取消後不會改動資料庫。
+
+可測試語句：
+
+```text
+幫 Alice Wang 新增一筆 2026-05-22 的高鐵費用 1490 元，廠商是台灣高鐵，類別交通，說明是台北到台中出差。
+新增一張發票，號碼 AB12345678，日期 2026-05-20，賣方統編 12345678，買方統編 87654321，金額 3150。
+```
+
+如果測試費用寫入，請確認員工姓名或員工編號存在於 `employees`。如果員工不存在，assistant 會追問可對應到現有員工的 `employee_name` 或 `employee_code`。
+
+## 13. 在 Docker 裡查看目前資料
 
 如果你是用本專案的 `docker-compose.yml` 啟動 MySQL，可以進入 MySQL CLI：
 

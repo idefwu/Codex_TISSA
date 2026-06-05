@@ -233,6 +233,12 @@ export function ControlPanel({
               name="dbQuery"
               onChange={onUpdateControl}
             />
+            <ToggleControl
+              checked={controls.dbWrite}
+              label="Enable DB Write"
+              name="dbWrite"
+              onChange={onUpdateControl}
+            />
             <ToggleControl checked={controls.rag} label="Enable RAG" name="rag" onChange={onUpdateControl} />
             <ToggleControl
               checked={controls.imageSkill}

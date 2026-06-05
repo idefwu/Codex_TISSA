@@ -671,6 +671,154 @@ input:focus-visible {
   color: var(--text);
 }
 
+.db-write-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  white-space: normal;
+}
+
+.db-write-card--pending_confirmation {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.db-write-card--needs_more_info {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
+}
+
+.db-write-card--confirmed {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+}
+
+.db-write-card--cancelled {
+  opacity: 0.82;
+}
+
+.db-write-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.db-write-card-header h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.db-write-card-header svg {
+  color: var(--success);
+}
+
+.db-write-card--cancelled .db-write-card-header svg {
+  color: var(--muted);
+}
+
+.db-write-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.db-write-field {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.db-write-field span,
+.db-write-resolved span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.db-write-field strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.db-write-resolved,
+.db-write-warning,
+.db-write-state,
+.db-write-result {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.db-write-warning,
+.db-write-state {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+}
+
+.db-write-result {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--panel));
+}
+
+.db-write-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-write-confirm-button,
+.db-write-cancel-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.db-write-confirm-button {
+  color: #fff;
+  background: var(--accent);
+}
+
+.db-write-confirm-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.db-write-cancel-button {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.db-write-cancel-button:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.db-write-confirm-button:disabled,
+.db-write-cancel-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .message-bubble--thinking {
   min-width: 82px;
 }
@@ -1092,6 +1240,10 @@ input:focus-visible {
 }
 
 @media (max-width: 560px) {
+  .db-write-field-grid {
+    grid-template-columns: 1fr;
+  }
+
   .composer-input-row {
     grid-template-columns: 1fr;
   }
