@@ -1,5 +1,6 @@
 import { Bot, Database, Image, RefreshCw, Send, User } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 
 function TypingIndicator() {
   return (
@@ -20,13 +21,29 @@ function MessageBubble({ message }) {
         {isUser ? <User size={16} /> : <Bot size={16} />}
       </div>
       <div className={`message-bubble ${message.isThinking ? 'message-bubble--thinking' : ''}`}>
-        {message.isThinking ? <TypingIndicator /> : message.content}
+        {message.isThinking ? (
+          <TypingIndicator />
+        ) : isUser ? (
+          message.content
+        ) : (
+          <ReactMarkdown
+            components={{
+              a: ({ children, ...props }) => (
+                <a {...props} target="_blank" rel="noreferrer">
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        )}
       </div>
     </article>
   )
 }
 
-export function ChatArea({ chat, dbStatus, onRefreshDbStatus, onSendMessage }) {
+export function ChatArea({ chat, dbStatus, error, isLoading, isSending, onRefreshDbStatus, onSendMessage }) {
   const [draft, setDraft] = useState('')
   const messagesEndRef = useRef(null)
 
@@ -37,7 +54,7 @@ export function ChatArea({ chat, dbStatus, onRefreshDbStatus, onSendMessage }) {
   const submitMessage = () => {
     const trimmedDraft = draft.trim()
 
-    if (!trimmedDraft) {
+    if (!trimmedDraft || !chat || isSending) {
       return
     }
 
@@ -80,6 +97,12 @@ export function ChatArea({ chat, dbStatus, onRefreshDbStatus, onSendMessage }) {
       </section>
 
       <section className="messages-pane" aria-label="聊天訊息">
+        {isLoading ? <div className="chat-state">載入聊天訊息...</div> : null}
+        {error ? <div className="chat-state chat-state--error">{error}</div> : null}
+        {!isLoading && !chat ? <div className="empty-chat-state">請先新增或選擇一個聊天室。</div> : null}
+        {!isLoading && chat?.messages.length === 0 ? (
+          <div className="empty-chat-state">這個聊天室還沒有訊息。</div>
+        ) : null}
         {chat?.messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
@@ -108,8 +131,15 @@ export function ChatArea({ chat, dbStatus, onRefreshDbStatus, onSendMessage }) {
             rows={2}
             aria-label="聊天輸入框"
             title="Enter 送出，Shift+Enter 換行"
+            disabled={!chat || isSending}
           />
-          <button type="submit" className="send-button" disabled={!draft.trim()} aria-label="送出訊息" title="送出訊息">
+          <button
+            type="submit"
+            className="send-button"
+            disabled={!chat || isSending || !draft.trim()}
+            aria-label="送出訊息"
+            title="送出訊息"
+          >
             <Send size={18} />
           </button>
         </div>

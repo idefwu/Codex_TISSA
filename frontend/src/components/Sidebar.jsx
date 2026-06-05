@@ -13,6 +13,7 @@ export function Sidebar({
   onSelectChat,
   onToggleCollapsed,
   onToggleTheme,
+  roomsState,
   theme,
 }) {
   const [editingChatId, setEditingChatId] = useState(null)
@@ -84,12 +85,22 @@ export function Sidebar({
 
       {isCompact ? null : (
         <>
-          <button type="button" className="primary-action" onClick={onAddChat}>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={onAddChat}
+            disabled={roomsState?.status === 'loading' || roomsState?.status === 'saving'}
+          >
             <MessageSquarePlus size={18} />
-            新增聊天室
+            {roomsState?.status === 'saving' ? '處理中...' : '新增聊天室'}
           </button>
 
           <nav className="chat-list" aria-label="聊天室列表">
+            {roomsState?.status === 'loading' ? <p className="sidebar-state">載入聊天室...</p> : null}
+            {roomsState?.status === 'error' ? <p className="sidebar-state sidebar-state--error">{roomsState.error}</p> : null}
+            {roomsState?.status !== 'loading' && chats.length === 0 ? (
+              <p className="sidebar-state">目前沒有聊天室，請先新增一個。</p>
+            ) : null}
             {chats.map((chat) => (
               <div className={`chat-item ${chat.id === activeChatId ? 'chat-item--active' : ''}`} key={chat.id}>
                 {editingChatId === chat.id ? (
@@ -105,7 +116,7 @@ export function Sidebar({
                 ) : (
                   <button type="button" className="chat-select" onClick={() => onSelectChat(chat.id)}>
                     {chat.title}
-                    <span>{chat.messages.length} 則訊息</span>
+                    <span>{chat.message_count ?? chat.messages?.length ?? 0} 則訊息</span>
                   </button>
                 )}
 

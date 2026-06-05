@@ -1,12 +1,22 @@
 from decimal import Decimal
+from datetime import datetime
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from sqlalchemy import func, inspect, select
+from sqlalchemy import desc, func, inspect, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import check_database_connection, create_session, get_engine
-from app.models import Department, Employee, ExpenseReport, Invoice, Vendor
+from app.llm import (
+    LLMConfigurationError,
+    LLMRequestError,
+    check_llm_connection,
+    clamp_temperature,
+    generate_llm_reply,
+    normalize_model,
+    normalize_system_prompt,
+)
+from app.models import ChatMessage, ChatRoom, Department, Employee, ExpenseReport, Invoice, Vendor
 
 
 def decimal_to_float(value):
@@ -15,6 +25,28 @@ def decimal_to_float(value):
     if isinstance(value, Decimal):
         return float(value)
     return value
+
+
+def serialize_chat_message(message):
+    return {
+        "id": message.id,
+        "room_id": message.room_id,
+        "role": message.role,
+        "content": message.content,
+        "metadata_json": message.metadata_json,
+        "model": message.model,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+def serialize_chat_room(room):
+    return {
+        "id": room.id,
+        "title": room.title,
+        "created_at": room.created_at.isoformat(),
+        "updated_at": room.updated_at.isoformat(),
+        "message_count": len(room.messages),
+    }
 
 
 def create_app() -> Flask:
@@ -64,6 +96,41 @@ def create_app() -> Flask:
                 }
             ),
             503,
+        )
+
+    @app.get("/api/llm/health")
+    def llm_health():
+        result = check_llm_connection()
+
+        if result["ok"]:
+            return jsonify(
+                {
+                    "status": "ok",
+                    "llm": {
+                        "configured": True,
+                        "reachable": True,
+                        "masked_key": result["masked_key"],
+                        "sample_model": result.get("sample_model"),
+                    },
+                    "message": result["message"],
+                }
+            )
+
+        status_code = 503 if result["status"] == "api_error" else 400
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "llm": {
+                        "configured": bool(result.get("masked_key")),
+                        "reachable": False,
+                        "masked_key": result.get("masked_key", ""),
+                    },
+                    "message": result["message"],
+                    "error": result.get("error", result["message"]),
+                }
+            ),
+            status_code,
         )
 
     @app.get("/api/db/tables")
@@ -252,6 +319,228 @@ def create_app() -> Flask:
         finally:
             session.close()
 
+    @app.get("/api/chat/rooms")
+    def chat_rooms():
+        session = create_session()
+
+        try:
+            rooms = session.query(ChatRoom).order_by(ChatRoom.updated_at.desc(), ChatRoom.id.desc()).all()
+            return jsonify({"status": "ok", "rooms": [serialize_chat_room(room) for room in rooms]})
+        except SQLAlchemyError as exc:
+            return jsonify({"status": "error", "message": "Unable to load chat rooms.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.post("/api/chat/rooms")
+    def create_chat_room():
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title", "")).strip() or "新聊天室"
+        session = create_session()
+
+        try:
+            room = ChatRoom(title=title)
+            session.add(room)
+            session.commit()
+            session.refresh(room)
+            return jsonify({"status": "ok", "room": serialize_chat_room(room)}), 201
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to create chat room.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.patch("/api/chat/rooms/<int:room_id>")
+    def update_chat_room(room_id):
+        payload = request.get_json(silent=True) or {}
+        title = str(payload.get("title", "")).strip()
+
+        if not title:
+            return jsonify({"status": "error", "message": "Title is required."}), 400
+
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            room.title = title
+            room.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(room)
+            return jsonify({"status": "ok", "room": serialize_chat_room(room)})
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to update chat room.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.delete("/api/chat/rooms/<int:room_id>")
+    def delete_chat_room(room_id):
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            session.delete(room)
+            session.commit()
+            return jsonify({"status": "ok", "deleted_id": room_id})
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to delete chat room.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.get("/api/chat/rooms/<int:room_id>/messages")
+    def chat_room_messages(room_id):
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            messages = (
+                session.query(ChatMessage)
+                .filter(ChatMessage.room_id == room_id)
+                .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
+                .all()
+            )
+            return jsonify(
+                {
+                    "status": "ok",
+                    "room": serialize_chat_room(room),
+                    "messages": [serialize_chat_message(message) for message in messages],
+                }
+            )
+        except SQLAlchemyError as exc:
+            return jsonify({"status": "error", "message": "Unable to load chat messages.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
+    @app.post("/api/chat/rooms/<int:room_id>/messages")
+    def create_chat_room_message(room_id):
+        payload = request.get_json(silent=True) or {}
+        message = str(payload.get("message", "")).strip()
+        model = normalize_model(payload.get("model"))
+        temperature = clamp_temperature(payload.get("temperature"))
+        system_prompt = normalize_system_prompt(payload.get("systemPrompt"))
+        try:
+            memory_rounds = min(max(int(payload.get("memoryRounds", 5)), 1), 10)
+        except (TypeError, ValueError):
+            memory_rounds = 5
+
+        if not message:
+            return jsonify({"status": "error", "message": "Message is required."}), 400
+
+        session = create_session()
+
+        try:
+            room = session.get(ChatRoom, room_id)
+            if room is None:
+                return jsonify({"status": "error", "message": "Chat room not found."}), 404
+
+            controls = {
+                "model": model,
+                "temperature": temperature,
+                "system_prompt": system_prompt,
+                "memory_rounds": memory_rounds,
+                "tools": payload.get("tools", {}),
+            }
+            history_rows = (
+                session.query(ChatMessage)
+                .filter(ChatMessage.room_id == room_id)
+                .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
+                .limit(memory_rounds * 2)
+                .all()
+            )
+            history = [
+                {
+                    "role": history_message.role,
+                    "content": history_message.content,
+                }
+                for history_message in reversed(history_rows)
+            ]
+            user_message = ChatMessage(
+                room_id=room.id,
+                role="user",
+                content=message,
+                metadata_json={"source": "frontend", "controls": controls, "llm_status": "submitted"},
+                model=model,
+            )
+
+            room.updated_at = datetime.utcnow()
+            session.add(user_message)
+            session.commit()
+            session.refresh(room)
+            session.refresh(user_message)
+
+            try:
+                llm_reply = generate_llm_reply(
+                    history=history,
+                    message=message,
+                    model=model,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                )
+            except LLMConfigurationError as exc:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "OpenAI API key is not configured.",
+                            "error": str(exc),
+                            "room": serialize_chat_room(room),
+                            "messages": [serialize_chat_message(user_message)],
+                        }
+                    ),
+                    400,
+                )
+            except LLMRequestError as exc:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "OpenAI API request failed.",
+                            "error": str(exc),
+                            "room": serialize_chat_room(room),
+                            "messages": [serialize_chat_message(user_message)],
+                        }
+                    ),
+                    502,
+                )
+
+            assistant_message = ChatMessage(
+                room_id=room.id,
+                role="assistant",
+                content=llm_reply.content,
+                metadata_json={"source": "openai", "controls": controls},
+                model=llm_reply.model,
+            )
+            room.updated_at = datetime.utcnow()
+            session.add(assistant_message)
+            session.commit()
+            session.refresh(room)
+            session.refresh(assistant_message)
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "room": serialize_chat_room(room),
+                    "messages": [
+                        serialize_chat_message(user_message),
+                        serialize_chat_message(assistant_message),
+                    ],
+                }
+            ), 201
+        except SQLAlchemyError as exc:
+            session.rollback()
+            return jsonify({"status": "error", "message": "Unable to save chat message.", "error": str(exc)}), 503
+        finally:
+            session.close()
+
     @app.post("/api/chat")
     def chat():
         payload = request.get_json(silent=True) or {}
@@ -265,7 +554,7 @@ def create_app() -> Flask:
             {
                 "status": "ok",
                 "model": model,
-                "reply": f"我收到你的訊息了：{message}。下一階段會串接後端與 LLM。",
+                "reply": f"後端已收到你的訊息：{message}。下一階段會由 LLM 回覆。",
             }
         )
 

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Database, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Database, KeyRound, RefreshCw, SlidersHorizontal, X } from 'lucide-react'
 
 const modelOptions = ['gpt-4o', 'gpt-5.5', 'gpt-5.4']
 
@@ -33,9 +33,11 @@ export function ControlPanel({
   collapsed,
   controls,
   dbSummary,
+  llmHealth,
   mobileOpen,
   onCloseMobile,
   onRefreshDbSummary,
+  onRefreshLlmHealth,
   onToggleCollapsed,
   onUpdateControl,
 }) {
@@ -122,15 +124,61 @@ export function ControlPanel({
             ) : null}
           </section>
 
+          <section className="db-summary-panel">
+            <div className="db-summary-header">
+              <div>
+                <p className="panel-kicker">OpenAI</p>
+                <h3>LLM Health</h3>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={onRefreshLlmHealth}
+                aria-label="重新檢查 LLM 狀態"
+                title="重新檢查 LLM 狀態"
+              >
+                <RefreshCw size={16} />
+              </button>
+            </div>
+
+            {llmHealth.state === 'checking' ? (
+              <div className="summary-state">
+                <KeyRound size={16} />
+                檢查中
+              </div>
+            ) : null}
+
+            {llmHealth.state === 'ready' ? (
+              <div className="summary-state summary-state--success">
+                <KeyRound size={16} />
+                <span>API Key 已設定：{llmHealth.data?.masked_key ?? '已遮罩'}</span>
+              </div>
+            ) : null}
+
+            {llmHealth.state === 'error' ? (
+              <div className="summary-state summary-state--error">
+                <KeyRound size={16} />
+                <span>
+                  {llmHealth.data?.masked_key ? `Key：${llmHealth.data.masked_key}，` : ''}
+                  {llmHealth.error}
+                </span>
+              </div>
+            ) : null}
+          </section>
+
           <label className="field">
-            <span>模型選擇</span>
-            <select value={controls.model} onChange={(event) => onUpdateControl('model', event.target.value)}>
+            <span>模型選擇或輸入</span>
+            <input
+              type="text"
+              list="model-options"
+              value={controls.model}
+              onChange={(event) => onUpdateControl('model', event.target.value)}
+            />
+            <datalist id="model-options">
               {modelOptions.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
+                <option key={model} value={model} />
               ))}
-            </select>
+            </datalist>
           </label>
 
           <label className="field">

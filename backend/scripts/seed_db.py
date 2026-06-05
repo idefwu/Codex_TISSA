@@ -167,8 +167,20 @@ def main() -> None:
         session.flush()
         session.add_all(
             [
-                ChatMessage(room_id=room.id, role="user", content="Show this month's expenses", model=None),
-                ChatMessage(room_id=room.id, role="assistant", content="Use /api/expenses to inspect demo rows.", model="gpt-4o"),
+                ChatMessage(
+                    room_id=room.id,
+                    role="user",
+                    content="Show this month's expenses",
+                    metadata_json={"source": "seed"},
+                    model=None,
+                ),
+                ChatMessage(
+                    room_id=room.id,
+                    role="assistant",
+                    content="Use /api/expenses to inspect demo rows.",
+                    metadata_json={"source": "seed", "mode": "demo"},
+                    model="gpt-4o",
+                ),
                 AuditLog(action="seed", entity_type="database", entity_id=None, detail="Inserted course demo data."),
             ]
         )

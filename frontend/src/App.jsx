@@ -1,38 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { MessageSquareText, SlidersHorizontal } from 'lucide-react'
 import { ChatArea } from './components/ChatArea'
 import { ControlPanel } from './components/ControlPanel'
 import { Sidebar } from './components/Sidebar'
 import './App.css'
 
-const createId = () => {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID()
-  }
+const createTempId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-const createAssistantMessage = (content, options = {}) => ({
-  id: createId(),
-  role: 'assistant',
-  content,
-  isThinking: false,
-  ...options,
-})
-
-const createUserMessage = (content) => ({
-  id: createId(),
-  role: 'user',
-  content,
-})
-
-const createChat = (title) => ({
-  id: createId(),
-  title,
-  messages: [
-    createAssistantMessage('你好，我是 DB Agent Chat 的前端原型。這一階段會先透過後端 mock API 回覆。'),
-  ],
+const wait = (ms) => new Promise((resolve) => {
+  window.setTimeout(resolve, ms)
 })
 
 const initialControls = {
@@ -47,36 +23,70 @@ const initialControls = {
   auditLog: true,
 }
 
-const fetchDbHealth = async () => {
-  const response = await fetch('/api/db/health')
+const apiRequest = async (path, options = {}) => {
+  const response = await fetch(path, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers ?? {}),
+    },
+    ...options,
+  })
   const data = await response.json().catch(() => ({}))
 
   if (!response.ok) {
-    throw new Error(data.error || data.message || `HTTP ${response.status}`)
+    const error = new Error(data.error || data.message || `HTTP ${response.status}`)
+    error.status = response.status
+    error.data = data
+    throw error
   }
 
   return data
 }
 
+const fetchDbHealth = async () => apiRequest('/api/db/health')
+const fetchLlmHealth = async () => apiRequest('/api/llm/health')
 const fetchDbSummary = async () => {
-  const response = await fetch('/api/db/summary')
-  const data = await response.json().catch(() => ({}))
-
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `HTTP ${response.status}`)
-  }
-
+  const data = await apiRequest('/api/db/summary')
   return data.summary
+}
+const fetchChatRooms = async () => {
+  const data = await apiRequest('/api/chat/rooms')
+  return data.rooms ?? []
+}
+const createChatRoom = async (title) => {
+  const data = await apiRequest('/api/chat/rooms', {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  })
+  return data.room
+}
+const updateChatRoom = async (roomId, title) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  })
+  return data.room
+}
+const deleteChatRoom = async (roomId) => apiRequest(`/api/chat/rooms/${roomId}`, { method: 'DELETE' })
+const fetchChatMessages = async (roomId) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}/messages`)
+  return data
+}
+const sendChatMessage = async (roomId, payload) => {
+  const data = await apiRequest(`/api/chat/rooms/${roomId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return data
 }
 
 function App() {
-  const [workspace, setWorkspace] = useState(() => {
-    const firstChat = createChat('課程助理')
-    return {
-      activeChatId: firstChat.id,
-      chats: [firstChat],
-    }
-  })
+  const [rooms, setRooms] = useState([])
+  const [activeRoomId, setActiveRoomId] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [roomsState, setRoomsState] = useState({ status: 'loading', error: '' })
+  const [messagesState, setMessagesState] = useState({ status: 'idle', error: '' })
+  const [isSending, setIsSending] = useState(false)
   const [controls, setControls] = useState(initialControls)
   const [dbStatus, setDbStatus] = useState({
     state: 'checking',
@@ -88,18 +98,26 @@ function App() {
     data: null,
     error: '',
   })
+  const [llmHealth, setLlmHealth] = useState({
+    state: 'checking',
+    data: null,
+    error: '',
+  })
   const [theme, setTheme] = useState('light')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isControlCollapsed, setIsControlCollapsed] = useState(false)
   const [mobileDrawer, setMobileDrawer] = useState(null)
-  const pendingTimersRef = useRef(new Set())
 
+  const activeRoom = useMemo(
+    () => rooms.find((room) => room.id === activeRoomId) ?? null,
+    [activeRoomId, rooms],
+  )
   const activeChat = useMemo(
-    () => workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? workspace.chats[0],
-    [workspace],
+    () => (activeRoom ? { ...activeRoom, messages } : null),
+    [activeRoom, messages],
   )
 
-  const refreshDbStatus = () => {
+  const refreshDbStatus = useCallback(() => {
     setDbStatus({
       state: 'checking',
       label: 'DB checking',
@@ -121,9 +139,9 @@ function App() {
           detail: error instanceof Error ? error.message : 'Database unavailable',
         })
       })
-  }
+  }, [])
 
-  const refreshDbSummary = () => {
+  const refreshDbSummary = useCallback(() => {
     setDbSummary({
       state: 'loading',
       data: null,
@@ -145,211 +163,288 @@ function App() {
           error: error instanceof Error ? error.message : 'Unable to load DB summary',
         })
       })
-  }
-
-  useEffect(() => {
-    let isCurrent = true
-
-    fetchDbHealth()
-      .then((data) => {
-        if (isCurrent) {
-          setDbStatus({
-            state: 'connected',
-            label: 'DB connected',
-            detail: data.database?.version ? `MySQL ${data.database.version}` : 'Connected',
-          })
-        }
-      })
-      .catch((error) => {
-        if (isCurrent) {
-          setDbStatus({
-            state: 'error',
-            label: 'DB error',
-            detail: error instanceof Error ? error.message : 'Database unavailable',
-          })
-        }
-      })
-
-    return () => {
-      isCurrent = false
-    }
   }, [])
 
-  useEffect(() => {
-    let isCurrent = true
-
-    fetchDbSummary()
-      .then((summary) => {
-        if (isCurrent) {
-          setDbSummary({
-            state: 'ready',
-            data: summary,
-            error: '',
-          })
-        }
-      })
-      .catch((error) => {
-        if (isCurrent) {
-          setDbSummary({
-            state: 'error',
-            data: null,
-            error: error instanceof Error ? error.message : 'Unable to load DB summary',
-          })
-        }
-      })
-
-    return () => {
-      isCurrent = false
-    }
-  }, [])
-
-  useEffect(() => {
-    const pendingTimers = pendingTimersRef.current
-
-    return () => {
-      pendingTimers.forEach((timerId) => window.clearTimeout(timerId))
-    }
-  }, [])
-
-  const addChat = () => {
-    setWorkspace((current) => {
-      const newChat = createChat(`新聊天室 ${current.chats.length + 1}`)
-      return {
-        activeChatId: newChat.id,
-        chats: [newChat, ...current.chats],
-      }
+  const refreshLlmHealth = useCallback(() => {
+    setLlmHealth({
+      state: 'checking',
+      data: null,
+      error: '',
     })
+
+    fetchLlmHealth()
+      .then((data) => {
+        setLlmHealth({
+          state: 'ready',
+          data: data.llm,
+          error: '',
+        })
+      })
+      .catch((error) => {
+        setLlmHealth({
+          state: 'error',
+          data: error.data?.llm ?? null,
+          error: error instanceof Error ? error.message : 'Unable to check LLM health',
+        })
+      })
+  }, [])
+
+  useEffect(() => {
+    refreshDbStatus()
+    refreshDbSummary()
+    refreshLlmHealth()
+  }, [refreshDbStatus, refreshDbSummary, refreshLlmHealth])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    setRoomsState({ status: 'loading', error: '' })
+    fetchChatRooms()
+      .then((loadedRooms) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setRooms(loadedRooms)
+        setActiveRoomId((currentActiveRoomId) => currentActiveRoomId ?? loadedRooms[0]?.id ?? null)
+        setRoomsState({ status: 'ready', error: '' })
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          setRoomsState({
+            status: 'error',
+            error:
+              error.status === 404
+                ? '找不到聊天室 API，請確認 Flask 後端已重啟。'
+                : error instanceof Error
+                  ? error.message
+                  : 'Unable to load chat rooms',
+          })
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeRoomId) {
+      setMessages([])
+      setMessagesState({ status: 'idle', error: '' })
+      return
+    }
+
+    let isCurrent = true
+
+    setMessagesState({ status: 'loading', error: '' })
+    fetchChatMessages(activeRoomId)
+      .then((data) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setMessages(data.messages ?? [])
+        setRooms((currentRooms) =>
+          currentRooms.map((room) => (room.id === data.room?.id ? data.room : room)),
+        )
+        setMessagesState({ status: 'ready', error: '' })
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          if (error.status === 404) {
+            setRooms((currentRooms) => currentRooms.filter((room) => room.id !== activeRoomId))
+            setActiveRoomId(null)
+            setMessages([])
+            setMessagesState({ status: 'idle', error: '' })
+            return
+          }
+
+          setMessages([])
+          setMessagesState({
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unable to load chat messages',
+          })
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [activeRoomId])
+
+  const addChat = async () => {
+    const title = `新聊天室 ${rooms.length + 1}`
+    setRoomsState({ status: 'saving', error: '' })
+
+    try {
+      const room = await createChatRoom(title)
+      setRooms((currentRooms) => [room, ...currentRooms])
+      setActiveRoomId(room.id)
+      setMessages([])
+      setMobileDrawer(null)
+      setRoomsState({ status: 'ready', error: '' })
+    } catch (error) {
+      setRoomsState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to create chat room',
+      })
+    }
+  }
+
+  const selectChat = (roomId) => {
+    setActiveRoomId(roomId)
     setMobileDrawer(null)
   }
 
-  const selectChat = (chatId) => {
-    setWorkspace((current) => ({
-      ...current,
-      activeChatId: chatId,
-    }))
-    setMobileDrawer(null)
-  }
-
-  const renameChat = (chatId, title) => {
+  const renameChat = async (roomId, title) => {
     const trimmedTitle = title.trim()
 
     if (!trimmedTitle) {
       return
     }
 
-    setWorkspace((current) => ({
-      ...current,
-      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, title: trimmedTitle } : chat)),
-    }))
+    const previousRooms = rooms
+    setRooms((currentRooms) =>
+      currentRooms.map((room) => (room.id === roomId ? { ...room, title: trimmedTitle } : room)),
+    )
+    setRoomsState({ status: 'saving', error: '' })
+
+    try {
+      const room = await updateChatRoom(roomId, trimmedTitle)
+      setRooms((currentRooms) => currentRooms.map((item) => (item.id === room.id ? room : item)))
+      setRoomsState({ status: 'ready', error: '' })
+    } catch (error) {
+      setRooms(previousRooms)
+      setRoomsState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to rename chat room',
+      })
+    }
   }
 
-  const deleteChat = (chatId) => {
-    setWorkspace((current) => {
-      const nextChats = current.chats.filter((chat) => chat.id !== chatId)
+  const deleteChat = async (roomId) => {
+    const previousRooms = rooms
+    const nextRooms = rooms.filter((room) => room.id !== roomId)
 
-      if (nextChats.length === 0) {
-        const replacementChat = createChat('新聊天室 1')
-        return {
-          activeChatId: replacementChat.id,
-          chats: [replacementChat],
-        }
+    setRooms(nextRooms)
+    if (activeRoomId === roomId) {
+      setActiveRoomId(nextRooms[0]?.id ?? null)
+    }
+    setRoomsState({ status: 'saving', error: '' })
+
+    try {
+      await deleteChatRoom(roomId)
+      setRoomsState({ status: 'ready', error: '' })
+    } catch (error) {
+      setRooms(previousRooms)
+      if (activeRoomId === roomId) {
+        setActiveRoomId(roomId)
       }
-
-      return {
-        activeChatId: current.activeChatId === chatId ? nextChats[0].id : current.activeChatId,
-        chats: nextChats,
-      }
-    })
+      setRoomsState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to delete chat room',
+      })
+    }
   }
 
-  const replaceThinkingMessage = (chatId, messageId, content) => {
-    setWorkspace((current) => ({
-      ...current,
-      chats: current.chats.map((chat) =>
-        chat.id === chatId
-          ? {
-              ...chat,
-              messages: chat.messages.map((message) =>
-                message.id === messageId
-                  ? {
-                      ...message,
-                      content,
-                      isThinking: false,
-                    }
-                  : message,
-              ),
-            }
-          : chat,
-      ),
-    }))
-  }
-
-  const sendMessage = (content) => {
+  const sendMessage = async (content) => {
     const trimmedContent = content.trim()
 
-    if (!trimmedContent || !activeChat?.id) {
+    if (!trimmedContent || !activeRoomId || isSending) {
       return
     }
 
-    const chatId = activeChat.id
-    const selectedModel = controls.model
-    const userMessage = createUserMessage(trimmedContent)
-    const thinkingMessage = createAssistantMessage('', { isThinking: true })
+    const pendingUserMessage = {
+      id: createTempId('user'),
+      role: 'user',
+      content: trimmedContent,
+      created_at: new Date().toISOString(),
+    }
+    const thinkingMessage = {
+      id: createTempId('assistant'),
+      role: 'assistant',
+      content: '',
+      isThinking: true,
+      created_at: new Date().toISOString(),
+    }
 
-    setWorkspace((current) => ({
-      ...current,
-      chats: current.chats.map((chat) =>
-        chat.id === chatId
-          ? { ...chat, messages: [...chat.messages, userMessage, thinkingMessage] }
-          : chat,
-      ),
-    }))
+    setMessages((currentMessages) => [...currentMessages, pendingUserMessage, thinkingMessage])
+    setMessagesState({ status: 'ready', error: '' })
+    setIsSending(true)
 
-    const timerId = window.setTimeout(async () => {
-      try {
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
+    try {
+      const [data] = await Promise.all([
+        sendChatMessage(activeRoomId, {
+          message: trimmedContent,
+          model: controls.model,
+          temperature: controls.temperature,
+          systemPrompt: controls.systemPrompt,
+          memoryRounds: controls.memoryRounds,
+          tools: {
+            contextRouter: controls.contextRouter,
+            dbQuery: controls.dbQuery,
+            rag: controls.rag,
+            imageSkill: controls.imageSkill,
+            auditLog: controls.auditLog,
           },
-          body: JSON.stringify({
-            message: trimmedContent,
-            model: selectedModel,
-            temperature: controls.temperature,
-            systemPrompt: controls.systemPrompt,
-            memoryRounds: controls.memoryRounds,
-            tools: {
-              contextRouter: controls.contextRouter,
-              dbQuery: controls.dbQuery,
-              rag: controls.rag,
-              imageSkill: controls.imageSkill,
-              auditLog: controls.auditLog,
-            },
-          }),
-        })
-        const data = await response.json().catch(() => ({}))
+        }),
+        wait(2000),
+      ])
+      const savedMessages = data.messages ?? []
 
-        if (!response.ok) {
-          throw new Error(data.message || `HTTP ${response.status}`)
-        }
-
-        replaceThinkingMessage(
-          chatId,
-          thinkingMessage.id,
-          data.reply || `我收到你的訊息了：${trimmedContent}。下一階段會串接後端與 LLM。`,
+      setMessages((currentMessages) => [
+        ...currentMessages.filter(
+          (message) => message.id !== pendingUserMessage.id && message.id !== thinkingMessage.id,
+        ),
+        ...savedMessages,
+      ])
+      if (data.room) {
+        setRooms((currentRooms) =>
+          currentRooms
+            .map((room) => (room.id === data.room.id ? data.room : room))
+            .sort((left, right) => new Date(right.updated_at) - new Date(left.updated_at)),
         )
-      } catch (error) {
-        replaceThinkingMessage(
-          chatId,
-          thinkingMessage.id,
-          `後端目前無法回覆：${error instanceof Error ? error.message : 'unknown error'}`,
-        )
-      } finally {
-        pendingTimersRef.current.delete(timerId)
       }
-    }, 2000)
+    } catch (error) {
+      const savedMessages = error.data?.messages ?? []
+      const errorMessage = `LLM 目前無法回覆：${error instanceof Error ? error.message : 'unknown error'}`
 
-    pendingTimersRef.current.add(timerId)
+      setMessages((currentMessages) =>
+        savedMessages.length > 0
+          ? [
+              ...currentMessages.filter(
+                (message) => message.id !== pendingUserMessage.id && message.id !== thinkingMessage.id,
+              ),
+              ...savedMessages,
+              {
+                ...thinkingMessage,
+                content: errorMessage,
+                isThinking: false,
+              },
+            ]
+          : currentMessages.map((message) =>
+              message.id === thinkingMessage.id
+                ? {
+                    ...message,
+                    content: errorMessage,
+                    isThinking: false,
+                  }
+                : message,
+            ),
+      )
+      if (error.data?.room) {
+        setRooms((currentRooms) =>
+          currentRooms.map((room) => (room.id === error.data.room.id ? error.data.room : room)),
+        )
+      }
+      setMessagesState({
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unable to send chat message',
+      })
+    } finally {
+      setIsSending(false)
+    }
   }
 
   const updateControl = (name, value) => {
@@ -388,10 +483,11 @@ function App() {
       </header>
 
       <Sidebar
-        chats={workspace.chats}
-        activeChatId={workspace.activeChatId}
+        chats={rooms}
+        activeChatId={activeRoomId}
         collapsed={isSidebarCollapsed}
         mobileOpen={mobileDrawer === 'chats'}
+        roomsState={roomsState}
         theme={theme}
         onAddChat={addChat}
         onCloseMobile={() => setMobileDrawer(null)}
@@ -405,6 +501,9 @@ function App() {
       <ChatArea
         chat={activeChat}
         dbStatus={dbStatus}
+        isLoading={messagesState.status === 'loading'}
+        isSending={isSending}
+        error={messagesState.error || roomsState.error}
         onRefreshDbStatus={refreshDbStatus}
         onSendMessage={sendMessage}
       />
@@ -413,9 +512,11 @@ function App() {
         collapsed={isControlCollapsed}
         controls={controls}
         dbSummary={dbSummary}
+        llmHealth={llmHealth}
         mobileOpen={mobileDrawer === 'controls'}
         onCloseMobile={() => setMobileDrawer(null)}
         onRefreshDbSummary={refreshDbSummary}
+        onRefreshLlmHealth={refreshLlmHealth}
         onToggleCollapsed={() => setIsControlCollapsed((current) => !current)}
         onUpdateControl={updateControl}
       />
